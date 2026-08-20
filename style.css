@@ -1,0 +1,107 @@
+.vc-iab-frame {
+    position: fixed;
+    left: -100000px;
+    top: 0;
+    width: 1200px;
+    height: 800px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+.vc-iab-frame.vc-iab-active {
+    position: static;
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    height: auto;
+}
+
+.vc-iab-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.vc-iab-address {
+    flex: 1;
+    min-width: 0;
+}
+
+.vc-iab-stage {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.vc-iab-view {
+    position: absolute;
+    inset: 0;
+    visibility: hidden;
+}
+
+.vc-iab-view.vc-iab-active {
+    visibility: visible;
+}
+
+.vc-iab-flip {
+    transform: rotate(180deg);
+}
+
+.vc-iab-spin {
+    animation: vc-iab-spin 1s linear infinite;
+}
+
+@keyframes vc-iab-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.vc-iab-favicon {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    object-fit: contain;
+}
+
+
+.vc-iab-install-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.vc-iab-install-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.vc-iab-extension {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--background-mod-subtle);
+}
+
+.vc-iab-extension-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.vc-iab-extension-meta {
+    color: var(--text-muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.vc-iab-audio {
+    color: var(--text-default);
+    flex: 0 0 auto;
+}
