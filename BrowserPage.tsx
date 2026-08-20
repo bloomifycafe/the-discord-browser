@@ -11,7 +11,7 @@ import { ResetIcon, RightArrow } from "@components/Icons";
 import { classNameFactory } from "@utils/css";
 import { classes } from "@utils/misc";
 import { PluginNative } from "@utils/types";
-import { React, showToast, TextInput, Toasts, Tooltip, useEffect, useRef, useState } from "@webpack/common";
+import { React, showToast, TextInput, Toasts, Tooltip, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
 import type { KeyboardEvent, ReactNode } from "react";
 
 import {
@@ -204,9 +204,27 @@ function normalize(input: string) {
 export function BrowserFrame({ ids, activeId }: { ids: string[]; activeId: string | null; }) {
     useViewsVersion();
 
+    const frame = useRef<HTMLDivElement>(null);
+    const parked = useRef<{ width: number; height: number; }>(null);
+    const lastActive = useRef<string>(null);
+
+    if (activeId !== null) lastActive.current = activeId;
+    const chromeId = activeId ?? lastActive.current;
+
+    useLayoutEffect(() => {
+        if (activeId === null || !frame.current) return;
+
+        const { width, height } = frame.current.getBoundingClientRect();
+        if (width && height) parked.current = { width, height };
+    });
+
     return (
-        <div className={cl("frame", { active: activeId !== null })}>
-            {activeId !== null && <BrowserChrome id={activeId} />}
+        <div
+            ref={frame}
+            className={cl("frame", { active: activeId !== null })}
+            style={activeId === null ? parked.current ?? undefined : undefined}
+        >
+            {chromeId !== null && <BrowserChrome id={chromeId} />}
             <div className={cl("stage")}>
                 {ids.filter(id => !isDiscarded(id)).map(id => (
                     <WebviewFrame key={id} id={id} active={id === activeId} />

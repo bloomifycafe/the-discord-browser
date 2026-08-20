@@ -372,6 +372,8 @@ function historyBrowserId(tab: Tab) {
 }
 
 function leaveBrowserTab(tab: Tab) {
+    restoreDeadline = 0;
+
     for (let i = tab.index - 1; i >= 0; i--) {
         const previous = tab.entries[i];
         if (browserIdOf(previous) !== null) continue;
@@ -460,45 +462,43 @@ export function keepBrowserTab(tab: TabEntry) {
     return true;
 }
 
-let pendingRestore: { tabId: string; path: string; } | null = null;
+const RESTORE_WINDOW = 10_000;
+
+let restoreDeadline = 0;
 
 function onTabsChanged() {
     wakeActive();
-    restorePendingTab();
+    trackRestore();
 }
 
-function restorePendingTab() {
-    if (!pendingRestore) return;
+function trackRestore() {
+    if (Date.now() > restoreDeadline) return;
 
     const active = ChannelTabsStore.getActiveTab();
-    if (!active || active.id !== pendingRestore.tabId) {
-        pendingRestore = null;
-        return;
-    }
+    if (!active || parseRoute(active)) return;
 
-    if (browserIdOf(active) !== null) return;
+    const previous = parseRoute(active.entries[active.index - 1]);
+    if (!previous) return;
 
-    const { path } = pendingRestore;
-    pendingRestore = null;
+    restoreDeadline = 0;
 
     FluxDispatcher.dispatch({
         type: "CHANNEL_TABS_NAVIGATE_ROUTE",
-        routePath: path,
+        routePath: routeFor(previous.id, previous.url),
         routeLabel: BROWSER_LABEL
     });
 }
 
 export function startSync() {
-    const active = ChannelTabsStore.getActiveTab();
-    const parsed = parseRoute(active);
-    if (active && parsed) pendingRestore = { tabId: active.id, path: routeFor(parsed.id, parsed.url) };
+    restoreDeadline = Date.now() + RESTORE_WINDOW;
+    trackRestore();
 
     ChannelTabsStore.addChangeListener(onTabsChanged);
     sweepTimer = window.setInterval(sweep, 15_000);
 }
 
 export function stopSync() {
-    pendingRestore = null;
+    restoreDeadline = 0;
     ChannelTabsStore.removeChangeListener(onTabsChanged);
 
     if (sweepTimer !== undefined) {
