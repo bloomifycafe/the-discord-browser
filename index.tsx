@@ -19,6 +19,7 @@ import { BrowserFrame } from "./BrowserPage";
 import { ExtensionsPage } from "./ExtensionsPage";
 import {
     browserIdOf,
+    enableTabsExperiment,
     getView,
     keepBrowserTab,
     openBrowserTab,
@@ -139,6 +140,10 @@ export default definePlugin({
     ],
 
     keepBrowserTab,
+
+    flux: {
+        CONNECTION_OPEN: enableTabsExperiment
+    },
 
     handleLink(data: { href?: string; }, event?: MouseEvent) {
         if (!shouldOpenInTab(data?.href)) return false;

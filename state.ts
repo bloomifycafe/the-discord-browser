@@ -13,6 +13,7 @@ export const PARTITION = "persist:vc-in-app-browser";
 
 const BROWSER_ROUTE = "/vc-in-app-browser";
 const BROWSER_LABEL = "Browser";
+const TABS_EXPERIMENT = "2026-07-desktop-channel-tabs";
 
 interface TabEntry {
     kind: "channel" | "route";
@@ -29,6 +30,7 @@ interface Tab extends TabEntry {
 }
 
 interface ChannelTabsStoreShape {
+    isEnabled(): boolean;
     isUserOptedIn(): boolean;
     getTabs(): Tab[];
     getActiveTab(): Tab | null;
@@ -41,6 +43,11 @@ const ChannelTabsStore: ChannelTabsStoreShape = findStoreLazy("ChannelTabsStore"
 const Native = VencordNative.pluginHelpers.InAppBrowser as PluginNative<typeof import("./native")>;
 
 export const settings = definePluginSettings({
+    enableTabs: {
+        type: OptionType.BOOLEAN,
+        description: "Turn on Discord's channel tabs experiment automatically, since browser tabs are built on it.",
+        default: true
+    },
     homepage: {
         type: OptionType.STRING,
         description: "Page that new browser tabs start on.",
@@ -489,7 +496,24 @@ function trackRestore() {
     });
 }
 
+export function enableTabsExperiment() {
+    if (!settings.store.enableTabs || ChannelTabsStore.isEnabled()) return;
+
+    FluxDispatcher.dispatch({
+        type: "APEX_EXPERIMENT_OVERRIDE_CREATE",
+        experimentName: TABS_EXPERIMENT,
+        variantId: 1
+    });
+
+    FluxDispatcher.dispatch({
+        type: "CHANNEL_TABS_SET_ENABLED",
+        enabled: true
+    });
+}
+
 export function startSync() {
+    enableTabsExperiment();
+
     restoreDeadline = Date.now() + RESTORE_WINDOW;
     trackRestore();
 
