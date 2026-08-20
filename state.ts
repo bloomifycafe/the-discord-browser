@@ -197,23 +197,37 @@ function contentsIdOf(element: WebviewElement) {
     }
 }
 
-function applyFrozen(id: string, element: WebviewElement, next: boolean) {
+async function applyFrozen(id: string, element: WebviewElement, next: boolean) {
     if (frozen.has(id) === next) return;
 
     const contentsId = contentsIdOf(element);
     if (contentsId === null) return;
 
+    if (!await Native.setFrozen(contentsId, next)) return;
+
     if (next) frozen.add(id);
     else frozen.delete(id);
+}
 
-    Native.setFrozen(contentsId, next);
+function activeBrowserId() {
+    return tabsUsable() ? browserIdOf(ChannelTabsStore.getActiveTab()) : null;
+}
+
+function wakeActive() {
+    const id = activeBrowserId();
+    if (id === null) return;
+
+    lastActive.set(id, Date.now());
+
+    const element = elements.get(id);
+    if (element) applyFrozen(id, element, false);
+
+    if (discarded.delete(id)) emitViews();
 }
 
 function sweep() {
-    const activeId = tabsUsable() ? browserIdOf(ChannelTabsStore.getActiveTab()) : null;
+    const activeId = activeBrowserId();
     const now = Date.now();
-
-    if (activeId !== null && discarded.delete(activeId)) emitViews();
 
     const discardAfter = settings.store.discardAfterMinutes * 60_000;
 
@@ -243,7 +257,7 @@ function sweep() {
 }
 
 let idCounter = 0;
-let pendingUrl: string | null = null;
+let pending: { id: string; url: string; } | null = null;
 
 function nextId() {
     return `${Date.now().toString(36)}-${idCounter++}`;
@@ -402,20 +416,23 @@ export function openBrowserTab(url?: string) {
         return;
     }
 
-    pendingUrl = url ?? null;
+    const id = nextId();
+    pending = url ? { id, url } : null;
 
     FluxDispatcher.dispatch({
         type: "CHANNEL_TABS_OPEN",
         kind: "route",
-        routePath: routeFor(nextId()),
+        routePath: routeFor(id),
         routeLabel: BROWSER_LABEL,
         active: true
     });
 }
 
-export function takePendingUrl() {
-    const url = pendingUrl;
-    pendingUrl = null;
+export function takePendingUrl(id: string) {
+    if (pending?.id !== id) return null;
+
+    const { url } = pending;
+    pending = null;
     return url;
 }
 
@@ -437,12 +454,18 @@ export function keepBrowserTab(tab: TabEntry) {
     if (!parsed) return false;
 
     const element = getElement(parsed.id);
+    if (element) applyFrozen(parsed.id, element, false);
     if (parsed.url && element && element.getURL() !== parsed.url) element.loadURL(parsed.url);
 
     return true;
 }
 
 let pendingRestore: { tabId: string; path: string; } | null = null;
+
+function onTabsChanged() {
+    wakeActive();
+    restorePendingTab();
+}
 
 function restorePendingTab() {
     if (!pendingRestore) return;
@@ -470,13 +493,13 @@ export function startSync() {
     const parsed = parseRoute(active);
     if (active && parsed) pendingRestore = { tabId: active.id, path: routeFor(parsed.id, parsed.url) };
 
-    ChannelTabsStore.addChangeListener(restorePendingTab);
+    ChannelTabsStore.addChangeListener(onTabsChanged);
     sweepTimer = window.setInterval(sweep, 15_000);
 }
 
 export function stopSync() {
     pendingRestore = null;
-    ChannelTabsStore.removeChangeListener(restorePendingTab);
+    ChannelTabsStore.removeChangeListener(onTabsChanged);
 
     if (sweepTimer !== undefined) {
         clearInterval(sweepTimer);

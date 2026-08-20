@@ -448,7 +448,7 @@ export async function fetchFavicon(_: IpcMainInvokeEvent, url: string): Promise<
     }
 }
 
-export function setFrozen(_: IpcMainInvokeEvent, webContentsId: number, frozen: boolean) {
+export async function setFrozen(_: IpcMainInvokeEvent, webContentsId: number, frozen: boolean) {
     const contents = webContents.fromId(webContentsId);
     if (!contents || contents.isDestroyed() || contents.getType() !== "webview") return false;
     if (frozen && contents.isCurrentlyAudible()) return false;
@@ -456,10 +456,10 @@ export function setFrozen(_: IpcMainInvokeEvent, webContentsId: number, frozen: 
     try {
         if (!contents.debugger.isAttached()) {
             contents.debugger.attach("1.3");
-            contents.debugger.sendCommand("Page.enable");
+            await contents.debugger.sendCommand("Page.enable");
         }
 
-        contents.debugger.sendCommand("Page.setWebLifecycleState", { state: frozen ? "frozen" : "active" });
+        await contents.debugger.sendCommand("Page.setWebLifecycleState", { state: frozen ? "frozen" : "active" });
         return true;
     } catch {
         return false;

@@ -64,7 +64,7 @@ function IconButton({ label, disabled, onClick, children }: IconButtonProps) {
 
 function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
     const ref = useRef<WebviewElement>(null);
-    const [initialSrc] = useState(() => urlForId(id) ?? takePendingUrl() ?? settings.store.homepage);
+    const [initialSrc] = useState(() => urlForId(id) ?? takePendingUrl(id) ?? settings.store.homepage);
 
     useEffect(() => {
         const element = ref.current;
