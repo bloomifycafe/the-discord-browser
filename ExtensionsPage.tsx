@@ -9,6 +9,7 @@ import "./style.css";
 import { Button } from "@components/Button";
 import { Heading } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
+import { Switch } from "@components/Switch";
 import { classNameFactory } from "@utils/css";
 import { Margins } from "@utils/margins";
 import { PluginNative } from "@utils/types";
@@ -47,6 +48,13 @@ export function ExtensionsPage() {
         }
     }
 
+    async function toggleUserScripts(storeId: string, allowed: boolean) {
+        const result = await Native.setUserScriptsAllowed(storeId, allowed);
+
+        if (result.ok) refresh();
+        else showToast(result.error ?? "Could not change that permission.", Toasts.Type.FAILURE);
+    }
+
     async function remove(storeId: string, name: string) {
         const result = await Native.removeExtension(storeId);
 
@@ -63,8 +71,10 @@ export function ExtensionsPage() {
             <Heading tag="h2">Browser Extensions</Heading>
             <Paragraph className={Margins.top8}>
                 Extensions for the in-app browser. Paste a Chrome Web Store link or an extension id to install one,
-                or drop an unpacked extension into the folder below. Electron supports a subset of the extension
-                APIs, so content scripts generally work while some background and tabs APIs may not.
+                or drop an unpacked extension into the folder. Some extensions may not work.
+            </Paragraph>
+            <Paragraph className={Margins.top8}>
+                The switch on each extension allows user scripts.
             </Paragraph>
 
             <div className={cl("install-row", [Margins.top16])}>
@@ -90,16 +100,24 @@ export function ExtensionsPage() {
 
             {listing?.extensions.map(extension => (
                 <div key={extension.storeId} className={cl("extension", [Margins.top8])}>
+                    {extension.icon
+                        ? <img className={cl("ext-icon")} src={extension.icon} alt="" aria-hidden />
+                        : <div className={cl("ext-icon")} />}
                     <div className={cl("extension-info")}>
                         <Heading tag="h5">{extension.name} {extension.version}</Heading>
                         <Paragraph className={cl("extension-meta")}>
                             {extension.error
                                 ? `Failed to load: ${extension.error}`
                                 : extension.loaded
-                                    ? extension.storeId
+                                    ? `${extension.storeId}${extension.userScripts ? " — user scripts allowed" : ""}`
                                     : `${extension.storeId} — restart to load`}
                         </Paragraph>
                     </div>
+                    <Switch
+                        checked={extension.userScripts}
+                        onChange={value => toggleUserScripts(extension.storeId, value)}
+                        aria-label="Allow user scripts"
+                    />
                     {extension.optionsUrl && (
                         <Button variant="secondary" onClick={() => openBrowserTab(extension.optionsUrl ?? undefined)}>
                             Options

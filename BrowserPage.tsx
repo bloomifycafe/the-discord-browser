@@ -11,8 +11,8 @@ import { ResetIcon } from "@components/Icons";
 import { classNameFactory } from "@utils/css";
 import { classes } from "@utils/misc";
 import { PluginNative } from "@utils/types";
-import { React, showToast, TextInput, Toasts, Tooltip, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
-import type { KeyboardEvent, ReactNode } from "react";
+import { ContextMenuApi, Menu, React, SettingsRouter, showToast, TextInput, Toasts, Tooltip, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 
 import {
     dropView,
@@ -20,6 +20,7 @@ import {
     getElement,
     getView,
     isDiscarded,
+    openBrowserTab,
     PARTITION,
     refreshAudible,
     registerElement,
@@ -39,7 +40,7 @@ const Native = VencordNative.pluginHelpers.InAppBrowser as PluginNative<typeof i
 interface IconButtonProps {
     label: string;
     disabled?: boolean;
-    onClick: () => void;
+    onClick: (event: MouseEvent) => void;
     children: ReactNode;
 }
 
@@ -59,6 +60,62 @@ function IconButton({ label, disabled, onClick, children }: IconButtonProps) {
                 </Button>
             )}
         </Tooltip>
+    );
+}
+
+function PuzzleIcon() {
+    return (
+        <svg width={16} height={16} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M10 3a2.5 2.5 0 0 1 5 0v1h2.5A1.5 1.5 0 0 1 19 5.5V8h1a2.5 2.5 0 0 1 0 5h-1v2.5a1.5 1.5 0 0 1-1.5 1.5H15v1a2.5 2.5 0 0 1-5 0v-1H7.5A1.5 1.5 0 0 1 6 15.5V13H5a2.5 2.5 0 0 1 0-5h1V5.5A1.5 1.5 0 0 1 7.5 4H10V3Z" />
+        </svg>
+    );
+}
+
+type Extension = Awaited<ReturnType<typeof Native.getExtensions>>["extensions"][number];
+
+function BackgroundHosts() {
+    const [pages, setPages] = useState<Array<{ id: string; name: string; url: string; }>>([]);
+
+    useEffect(() => { Native.getBackgroundPages().then(setPages); }, []);
+
+    return (
+        <div className={cl("backgrounds")} aria-hidden>
+            {pages.map(page => React.createElement("webview", {
+                key: page.id,
+                src: page.url,
+                partition: PARTITION,
+                style: { width: "100%", height: "100%", display: "flex" }
+            }))}
+        </div>
+    );
+}
+
+function ExtensionsMenu({ extensions }: { extensions: Extension[]; }) {
+    const usable = extensions.filter(extension => extension.loaded);
+
+    return (
+        <Menu.Menu navId="vc-iab-extensions" onClose={ContextMenuApi.closeContextMenu} aria-label="Extensions">
+            <Menu.MenuGroup>
+                {usable.length === 0 && (
+                    <Menu.MenuItem id="vc-iab-ext-none" label="No extensions installed" disabled action={() => { }} />
+                )}
+                {usable.map(extension => (
+                    <Menu.MenuItem
+                        key={extension.storeId}
+                        id={`vc-iab-ext-${extension.storeId}`}
+                        label={extension.name}
+                        disabled={!extension.popupUrl && !extension.optionsUrl}
+                        action={() => openBrowserTab(extension.popupUrl ?? extension.optionsUrl ?? undefined)}
+                    />
+                ))}
+            </Menu.MenuGroup>
+            <Menu.MenuSeparator />
+            <Menu.MenuItem
+                id="vc-iab-ext-manage"
+                label="Manage extensions"
+                action={() => SettingsRouter.openUserSettings("vc_in_app_browser_extensions_panel")}
+            />
+        </Menu.Menu>
     );
 }
 
@@ -142,6 +199,11 @@ function BrowserChrome({ id }: { id: string; }) {
 
     const view = getView(id);
     const [address, setAddress] = useState(view.url);
+    const [extensions, setExtensions] = useState<Extension[]>([]);
+
+    const refreshExtensions = () => Native.getExtensions().then(result => setExtensions(result.extensions));
+
+    useEffect(() => { refreshExtensions(); }, []);
 
     useEffect(() => setAddress(view.url), [id, view.url]);
 
@@ -164,7 +226,10 @@ function BrowserChrome({ id }: { id: string; }) {
         showToast("Installing extension…", Toasts.Type.MESSAGE);
         const result = await Native.installExtension(extensionId);
 
-        if (result.ok) showToast(`Installed ${result.name}.`, Toasts.Type.SUCCESS);
+        if (result.ok) {
+            showToast(`Installed ${result.name}.`, Toasts.Type.SUCCESS);
+            refreshExtensions();
+        }
         else showToast(result.error ?? "Could not install that extension.", Toasts.Type.FAILURE);
     }
 
@@ -172,6 +237,15 @@ function BrowserChrome({ id }: { id: string; }) {
         <div className={cl("bar")} onKeyDown={handleKeyDown}>
             <IconButton label="Reload" onClick={() => getElement(id)?.reload()}>
                 <ResetIcon className={classes(view.loading && cl("spin"))} width={16} height={16} />
+            </IconButton>
+            <IconButton
+                label="Extensions"
+                onClick={event => {
+                    ContextMenuApi.openContextMenu(event, () => <ExtensionsMenu extensions={extensions} />);
+                    refreshExtensions();
+                }}
+            >
+                <PuzzleIcon />
             </IconButton>
             {extensionId && (
                 <Button variant="primary" size="small" onClick={install}>
@@ -224,6 +298,7 @@ export function BrowserFrame({ ids, activeId }: { ids: string[]; activeId: strin
             style={activeId === null ? parked.current ?? undefined : undefined}
         >
             {chromeId !== null && <BrowserChrome id={chromeId} />}
+            <BackgroundHosts />
             <div className={cl("stage")}>
                 {ids.filter(id => !isDiscarded(id)).map(id => (
                     <WebviewFrame key={id} id={id} active={id === activeId} />

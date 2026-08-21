@@ -101,3 +101,19 @@
     color: var(--text-default);
     flex: 0 0 auto;
 }
+
+.vc-iab-ext-icon {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    border-radius: 3px;
+    object-fit: contain;
+}
+
+.vc-iab-backgrounds {
+    position: fixed;
+    left: -100000px;
+    top: 0;
+    width: 400px;
+    height: 300px;
+}

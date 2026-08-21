@@ -18,54 +18,234 @@ const INSTALLER_PARTITION = "vc-in-app-browser-installer";
 const SHIM_PATH = join(DATA_DIR, "browserExtensionShim.js");
 const shimStatus: Record<string, string> = {};
 const SW_WRAPPER = "vc-iab-service-worker.js";
+const BG_PAGE = "vc-iab-background.html";
+const BG_SHIM = "vc-iab-background-shim.js";
+const USER_SCRIPTS_DIR = "vc-iab-userscripts";
+const USER_SCRIPTS_FILE = join(DATA_DIR, "browserExtensionUserScripts.json");
 
-/**
- * Electron's service worker preloads never reach extension service workers, so a
- * manifest v3 background worker still dies on the missing namespaces. Point the
- * manifest at a wrapper that installs the shim and then loads the real worker.
- */
-function shimServiceWorker(folder: string) {
+const USER_SCRIPTS_SOURCE = `
+(() => {
+    const PREFIX = "vc-iab-us-";
+    const pending = new Map();
+    let seq = 0;
+
+    window.addEventListener("message", event => {
+        const data = event.data;
+        if (event.source !== window || data?.__vcIab !== "reply" || !pending.has(data.id)) return;
+
+        const { resolve, reject } = pending.get(data.id);
+        pending.delete(data.id);
+        data.error ? reject(new Error(data.error)) : resolve(data.result);
+    });
+
+    const stage = scripts => new Promise((resolve, reject) => {
+        const id = ++seq;
+        pending.set(id, { resolve, reject });
+        window.postMessage({ __vcIab: "stage", id, scripts }, "*");
+    });
+
+    const codeOf = js => (js ?? []).map(part => part?.code).filter(Boolean).join("\\n;\\n");
+    const filesOf = js => (js ?? []).map(part => part?.file).filter(Boolean);
+    const mine = async () => (await chrome.scripting.getRegisteredContentScripts())
+        .filter(script => script.id.startsWith(PREFIX));
+
+    const toContentScript = (script, staged) => ({
+        id: PREFIX + script.id,
+        js: staged.files,
+        matches: script.matches,
+        excludeMatches: script.excludeMatches,
+        allFrames: !!script.allFrames,
+        runAt: script.runAt ?? "document_idle",
+        world: "MAIN"
+    });
+
+    const prepare = async scripts => {
+        const staged = await stage(scripts.map(script => ({
+            id: script.id, code: codeOf(script.js), files: filesOf(script.js)
+        })));
+        return scripts.map((script, index) => toContentScript(script, staged[index]));
+    };
+
+    const install = () => {
+        if (typeof chrome === "undefined" || chrome === null || !chrome.scripting) return false;
+
+        chrome.userScripts = {
+            async register(scripts) {
+                await chrome.scripting.registerContentScripts(await prepare(scripts));
+            },
+            async update(scripts) {
+                await chrome.scripting.updateContentScripts(await prepare(scripts));
+            },
+            async unregister(filter) {
+                const ids = filter?.ids
+                    ? filter.ids.map(id => PREFIX + id)
+                    : (await mine()).map(script => script.id);
+
+                if (ids.length > 0) await chrome.scripting.unregisterContentScripts({ ids });
+            },
+            async getScripts(filter) {
+                return (await mine())
+                    .map(script => ({ ...script, id: script.id.slice(PREFIX.length) }))
+                    .filter(script => !filter?.ids || filter.ids.includes(script.id));
+            },
+            async execute(injection) {
+                const [staged] = await stage([{
+                    id: "execute-" + Date.now(), code: codeOf(injection.js), files: filesOf(injection.js)
+                }]);
+                return chrome.scripting.executeScript({ target: injection.target, files: staged.files, world: "MAIN" });
+            },
+            configureWorld: () => Promise.resolve(),
+            resetWorldConfiguration: () => Promise.resolve(),
+            getWorldConfigurations: () => Promise.resolve([]),
+            onUserScriptMessage: { addListener() { }, removeListener() { }, hasListener: () => false }
+        };
+
+        return true;
+    };
+
+    if (install()) return;
+
+    const timer = setInterval(() => { if (install()) clearInterval(timer); }, 20);
+    setTimeout(() => clearInterval(timer), 10000);
+})();
+`;
+
+const grantedStoreIds = new Set<string>();
+
+function loadUserScriptGrants() {
+    grantedStoreIds.clear();
+    for (const [storeId, allowed] of Object.entries(readUserScriptGrants())) {
+        if (allowed === true) grantedStoreIds.add(storeId);
+    }
+}
+
+function readUserScriptGrants(): Record<string, boolean> {
+    try {
+        return JSON.parse(readFileSync(USER_SCRIPTS_FILE, "utf8"));
+    } catch {
+        return {};
+    }
+}
+
+export function setUserScriptsAllowed(_: IpcMainInvokeEvent, storeId: string, allowed: boolean) {
+    if (typeof storeId !== "string" || !/^[a-z0-9_-]+$/i.test(storeId)) return { ok: false, error: "Unknown extension." };
+
+    const grants = readUserScriptGrants();
+    if (allowed) grants[storeId] = true;
+    else delete grants[storeId];
+
+    try {
+        writeFileSync(USER_SCRIPTS_FILE, JSON.stringify(grants, null, 2));
+    } catch (error) {
+        return { ok: false, error: String(error).slice(0, 160) };
+    }
+
+    loadUserScriptGrants();
+    writeExtensionShim();
+
+    const extension = loadedExtensions.find(item => item.storeId === storeId);
+    const background = extension && webContents.getAllWebContents()
+        .find(contents => contents.getURL().startsWith(`chrome-extension://${extension.id}/${BG_PAGE}`));
+
+    background?.reload();
+
+    return { ok: true };
+}
+
+const BG_SHIM_SOURCE = `
+(() => {
+    const resolved = () => Promise.resolve();
+
+    self.skipWaiting ??= resolved;
+    self.registration ??= {
+        scope: location.origin + "/",
+        active: null, waiting: null, installing: null,
+        update: resolved,
+        unregister: () => Promise.resolve(true),
+        showNotification: resolved,
+        getNotifications: () => Promise.resolve([])
+    };
+    self.clients ??= {
+        claim: resolved,
+        matchAll: () => Promise.resolve([]),
+        get: () => Promise.resolve(undefined),
+        openWindow: () => Promise.resolve(null)
+    };
+    self.importScripts ??= (...urls) => {
+        for (const url of urls) {
+            const script = document.createElement("script");
+            script.src = url;
+            script.async = false;
+            document.head.appendChild(script);
+        }
+    };
+
+    const lifecycle = new Set(["install", "activate"]);
+    const ignored = new Set(["fetch", "push", "sync", "periodicsync", "notificationclick", "notificationclose"]);
+    const addEventListener = self.addEventListener.bind(self);
+
+    self.addEventListener = (type, listener, options) => {
+        if (ignored.has(type)) return;
+        if (!lifecycle.has(type)) return addEventListener(type, listener, options);
+
+        queueMicrotask(() => {
+            try {
+                listener({ type, waitUntil: value => value });
+            } catch (error) {
+                console.error("[vc-iab] background " + type + " handler failed", error);
+            }
+        });
+    };
+})();
+`;
+
+function prepareBackground(folder: string) {
     const manifestPath = join(folder, "manifest.json");
 
     try {
         const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-        const worker = manifest.background?.service_worker;
-        if (typeof worker !== "string" || worker === SW_WRAPPER) return;
+        const background = manifest?.background;
+        if (!background) return null;
 
-        const load = manifest.background.type === "module"
-            ? `import("./${worker}");`
-            : `importScripts("${worker}");`;
+        const worker = background.service_worker === SW_WRAPPER
+            ? recoverWorker(folder)
+            : background.service_worker;
 
-        writeFileSync(join(folder, SW_WRAPPER), `
-(() => {
-    const boot = () => {
-        if (typeof chrome === "undefined" || chrome === null) return false;
-        ${SHIM_SOURCE}
-        ${load}
-        return true;
-    };
+        if (typeof worker !== "string" || worker.length === 0) return null;
 
-    if (boot()) return;
+        if (background.service_worker !== worker) {
+            background.service_worker = worker;
+            writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        }
+        rmSync(join(folder, SW_WRAPPER), { force: true });
 
-    const timer = setInterval(() => { if (boot()) clearInterval(timer); }, 20);
-    setTimeout(() => clearInterval(timer), 10000);
-})();
-`);
+        const type = background.type === "module" ? ' type="module"' : "";
+        writeFileSync(join(folder, BG_SHIM), BG_SHIM_SOURCE);
+        writeFileSync(join(folder, BG_PAGE), [
+            "<!doctype html>",
+            '<meta charset="utf-8">',
+            "<title>background</title>",
+            `<script src="${BG_SHIM}"></script>`,
+            `<script${type} src="${worker}"></script>`,
+            ""
+        ].join("\n"));
 
-        manifest.background.service_worker = SW_WRAPPER;
-        writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        return BG_PAGE;
     } catch {
-        // a malformed manifest will fail loudly at loadExtension instead
+        return null;
     }
 }
 
-/**
- * Electron has no extension toolbar, so chrome.action / chrome.browserAction and
- * chrome.commands are undefined. Extensions that touch them while starting up
- * (uBlock Origin calls action.setBadgeBackgroundColor) throw and never finish
- * initialising, which leaves their options pages spinning forever. Stub the
- * namespaces so those calls become harmless no-ops.
- */
+function recoverWorker(folder: string) {
+    try {
+        const wrapper = readFileSync(join(folder, SW_WRAPPER), "utf8");
+        const match = /import\("\.\/(.+?)"\)|importScripts\("(.+?)"\)/.exec(wrapper);
+        return match?.[1] ?? match?.[2] ?? null;
+    } catch {
+        return null;
+    }
+}
+
 const SHIM_SOURCE = `
 (() => {
     const install = () => {
@@ -177,16 +357,73 @@ const SHIM_SOURCE = `
 })();
 `;
 
-function installExtensionShim() {
+function registerUserScriptStaging() {
+    electron.ipcMain.handle("vc-iab-stage-user-scripts", (_event, extensionId: string, scripts: unknown) => {
+        const extension = loadedExtensions.find(item => item.id === extensionId);
+        if (!extension) throw new Error("Unknown extension.");
+        if (!grantedStoreIds.has(extension.storeId)) throw new Error("User scripts are not allowed for this extension.");
+        if (!Array.isArray(scripts)) throw new Error("Expected a list of scripts.");
+
+        const directory = join(EXTENSIONS_DIR, extension.storeId, USER_SCRIPTS_DIR);
+        mkdirSync(directory, { recursive: true });
+
+        return scripts.map((script: any) => {
+            const files = Array.isArray(script?.files) ? script.files.filter((file: unknown) => typeof file === "string") : [];
+
+            if (typeof script?.code === "string" && script.code.length > 0) {
+                const name = `${String(script.id ?? "script").replace(/[^a-z0-9_-]/gi, "_").slice(0, 80)}.js`;
+                const target = normalizePath(join(directory, name));
+                if (!target.startsWith(normalizePath(directory))) throw new Error("Rejected script name.");
+
+                writeFileSync(target, script.code);
+                files.unshift(`${USER_SCRIPTS_DIR}/${name}`);
+            }
+
+            return { id: script?.id, files };
+        });
+    });
+}
+
+function writeExtensionShim() {
+    const allowed = Object.fromEntries(loadedExtensions
+        .filter(extension => grantedStoreIds.has(extension.storeId))
+        .map(extension => [extension.id, true]));
+
     writeFileSync(SHIM_PATH, `
 const source = ${JSON.stringify(SHIM_SOURCE)};
+const userScripts = ${JSON.stringify(USER_SCRIPTS_SOURCE)};
+const allowed = ${JSON.stringify(allowed)};
 
 try {
-    require("electron").webFrame.executeJavaScript(source);
+    const { ipcRenderer, webFrame } = require("electron");
+    const extensionId = location.protocol === "chrome-extension:" ? location.hostname : null;
+
+    if (extensionId !== null && allowed[extensionId] === true) {
+        window.addEventListener("message", async event => {
+            const data = event.data;
+            if (event.source !== window || data?.__vcIab !== "stage") return;
+
+            try {
+                const result = await ipcRenderer.invoke("vc-iab-stage-user-scripts", extensionId, data.scripts);
+                window.postMessage({ __vcIab: "reply", id: data.id, result }, "*");
+            } catch (error) {
+                window.postMessage({ __vcIab: "reply", id: data.id, error: String(error) }, "*");
+            }
+        });
+
+        webFrame.executeJavaScript(source + userScripts);
+    } else {
+        webFrame.executeJavaScript(source);
+    }
 } catch {
     try { (0, eval)(source); } catch { /* the context blocks both, nothing else to try */ }
 }
 `);
+
+}
+
+function installExtensionShim() {
+    writeExtensionShim();
 
     const browsing = session.fromPartition(PARTITION);
 
@@ -208,6 +445,9 @@ interface ExtensionInfo {
     name: string;
     version: string;
     optionsPage: string | null;
+    popupPage: string | null;
+    icon: string | null;
+    backgroundPage: string | null;
 }
 
 const loadedExtensions: ExtensionInfo[] = [];
@@ -224,7 +464,7 @@ async function loadExtensions() {
         const folder = join(EXTENSIONS_DIR, entry.name);
         if (!existsSync(join(folder, "manifest.json"))) continue;
 
-        shimServiceWorker(folder);
+        const backgroundPage = prepareBackground(folder);
 
         try {
             const extension = await browsing.extensions.loadExtension(folder, { allowFileAccess: true });
@@ -233,7 +473,10 @@ async function loadExtensions() {
                 storeId: entry.name,
                 name: extension.name,
                 version: extension.manifest?.version ?? "",
-                optionsPage: optionsPageOf(extension.manifest)
+                optionsPage: optionsPageOf(extension.manifest),
+                popupPage: popupPageOf(extension.manifest),
+                icon: iconOf(extension.manifest, folder),
+                backgroundPage
             });
         } catch (error) {
             extensionFailures.push({ folder: entry.name, error: String(error).slice(0, 300) });
@@ -241,11 +484,6 @@ async function loadExtensions() {
     }
 }
 
-/**
- * Discord's user agent carries discord/x and Electron/x tokens, which many sites
- * treat as a bot signal. Strip them so requests look like the Chrome build this
- * really is, keeping the genuine Chrome version rather than inventing one.
- */
 function withChromeBrand(value: string) {
     if (value.includes('"Google Chrome"')) return value;
 
@@ -276,32 +514,16 @@ function isEnabled() {
     return pluginSettings().enabled === true;
 }
 
-/**
- * <webview> is the only way to embed a page inside Discord's DOM, so Discord's
- * modals and menus stack above it. It needs webviewTag at window construction,
- * and Discord's Electron build is missing WebContents#getZoomFactor, which the
- * guest view manager calls while attaching the guest.
- */
 if (isEnabled()) {
-    /**
-     * Electron leaves Chromium's media session off, so audio in a tab never
-     * reaches the OS now playing controls or the keyboard's media keys. Merge the
-     * features in rather than assigning, so any that Discord already set survive.
-     * Chromium maps this onto each platform itself: Now Playing on macOS, SMTC on
-     * Windows, MPRIS on Linux.
-     */
     if (pluginSettings().mediaKeys !== false) {
         const MEDIA_FEATURES = ["HardwareMediaKeyHandling", "MediaSessionService"];
 
-        // Discord disables these, and in Chromium disable-features beats
-        // enable-features, so strip them from its call before enabling them.
         const originalAppend = electron.app.commandLine.appendSwitch;
         electron.app.commandLine.appendSwitch = function (...args: [string, string?]) {
             if (args[0] === "disable-features" && typeof args[1] === "string") {
                 args[1] = args[1].split(",").filter(feature => !MEDIA_FEATURES.includes(feature.trim())).join(",");
             }
 
-            // appending the same switch replaces it, so fold ours into every call
             if (args[0] === "enable-features") {
                 const merged = new Set((args[1] ?? "").split(",").filter(Boolean));
                 for (const feature of MEDIA_FEATURES) merged.add(feature);
@@ -341,8 +563,10 @@ if (isEnabled()) {
     electron.app.whenReady().then(() => {
         const browsing = session.fromPartition(PARTITION);
         browsing.setUserAgent(browserUserAgent(browsing.getUserAgent()));
+        loadUserScriptGrants();
+        registerUserScriptStaging();
         installExtensionShim();
-        loadExtensions();
+        loadExtensions().then(writeExtensionShim);
 
         browsing.webRequest.onBeforeSendHeaders((details, callback) => {
             const headers = details.requestHeaders;
@@ -509,6 +733,33 @@ export function isAudible(_: IpcMainInvokeEvent, webContentsId: number) {
 const CRX_MAGIC = 0x43723234;
 const MAX_CRX_BYTES = 100 * 1024 * 1024;
 
+function popupPageOf(manifest: any) {
+    const page = manifest?.action?.default_popup ?? manifest?.browser_action?.default_popup;
+    return typeof page === "string" && page.length > 0 ? page : null;
+}
+
+function iconOf(manifest: any, folder: string) {
+    const icons = manifest?.icons ?? manifest?.action?.default_icon ?? manifest?.browser_action?.default_icon;
+    const sizes = typeof icons === "object" && icons !== null
+        ? Object.entries(icons).sort((a, b) => Number(a[0]) - Number(b[0]))
+        : [];
+    const relative = typeof icons === "string"
+        ? icons
+        : (sizes.find(([size]) => Number(size) >= 32) ?? sizes[sizes.length - 1])?.[1];
+
+    if (typeof relative !== "string") return null;
+
+    const file = normalizePath(join(folder, relative));
+    if (!file.startsWith(normalizePath(folder))) return null;
+
+    try {
+        const type = file.endsWith(".svg") ? "image/svg+xml" : file.endsWith(".jpg") ? "image/jpeg" : "image/png";
+        return `data:${type};base64,${readFileSync(file).toString("base64")}`;
+    } catch {
+        return null;
+    }
+}
+
 function optionsPageOf(manifest: any) {
     const page = manifest?.options_ui?.page ?? manifest?.options_page;
     return typeof page === "string" && page.length > 0 ? page : null;
@@ -538,8 +789,6 @@ export async function installExtension(_: IpcMainInvokeEvent, extensionId: strin
         + `&x=id%3D${extensionId}%26uc`;
 
     try {
-        // Fetch through a session with no extensions loaded: an installed ad
-        // blocker will otherwise block the store download.
         const response = await session.fromPartition(INSTALLER_PARTITION).fetch(url);
         const browsing = session.fromPartition(PARTITION);
         if (!response.ok) return { ok: false, error: `The store returned ${response.status}.` };
@@ -575,7 +824,10 @@ export async function installExtension(_: IpcMainInvokeEvent, extensionId: strin
             storeId: extensionId,
             name: extension.name,
             version: extension.manifest?.version ?? "",
-            optionsPage: optionsPageOf(extension.manifest)
+            optionsPage: optionsPageOf(extension.manifest),
+            popupPage: popupPageOf(extension.manifest),
+            icon: iconOf(extension.manifest, folder),
+            backgroundPage: prepareBackground(folder)
         });
 
         return { ok: true, name: extension.name };
@@ -599,7 +851,10 @@ export function getExtensions(_: IpcMainInvokeEvent) {
                 version: loaded?.version ?? "",
                 loaded: loaded !== undefined,
                 error: failure?.error ?? null,
-                optionsUrl: loaded?.optionsPage ? `chrome-extension://${loaded.id}/${loaded.optionsPage}` : null
+                optionsUrl: loaded?.optionsPage ? `chrome-extension://${loaded.id}/${loaded.optionsPage}` : null,
+                popupUrl: loaded?.popupPage ? `chrome-extension://${loaded.id}/${loaded.popupPage}` : null,
+                icon: loaded?.icon ?? null,
+                userScripts: grantedStoreIds.has(entry.name)
             };
         });
 
@@ -617,7 +872,7 @@ export function removeExtension(_: IpcMainInvokeEvent, storeId: string) {
         try {
             session.fromPartition(PARTITION).extensions.removeExtension(loadedExtensions[index].id);
         } catch {
-            // already unloaded, the folder still needs to go
+
         }
         loadedExtensions.splice(index, 1);
     }
@@ -633,4 +888,14 @@ export function removeExtension(_: IpcMainInvokeEvent, storeId: string) {
 export function openExtensionsFolder(_: IpcMainInvokeEvent) {
     mkdirSync(EXTENSIONS_DIR, { recursive: true });
     shell.openPath(EXTENSIONS_DIR);
+}
+
+export function getBackgroundPages(_: IpcMainInvokeEvent) {
+    return loadedExtensions
+        .filter(extension => extension.backgroundPage !== null)
+        .map(extension => ({
+            id: extension.id,
+            name: extension.name,
+            url: `chrome-extension://${extension.id}/${extension.backgroundPage}`
+        }));
 }
