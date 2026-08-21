@@ -20,6 +20,7 @@
 }
 
 .vc-iab-bar {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -116,4 +117,24 @@
     top: 0;
     width: 400px;
     height: 300px;
+}
+
+.vc-iab-popup-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+}
+
+.vc-iab-popup {
+    position: absolute;
+    top: 100%;
+    left: 8px;
+    z-index: 101;
+    overflow: hidden;
+    display: flex;
+    margin-top: 4px;
+    border-radius: 8px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-accent);
+    box-shadow: var(--shadow-high);
 }

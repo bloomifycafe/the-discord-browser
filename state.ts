@@ -159,6 +159,7 @@ export function refreshAudible(id: string) {
     if (getView(id).audible === audible) return;
 
     updateView(id, { audible });
+    pushTabs();
 }
 
 export function registerElement(id: string, element: WebviewElement | null) {
@@ -184,41 +185,98 @@ export function getElement(id: string) {
     return elements.get(id);
 }
 
-const extensionHosts = new Set<WebviewElement>();
+function tabSnapshot() {
+    const activeId = activeTabId();
+    const tabs: unknown[] = [];
 
-export function registerExtensionHost(element: WebviewElement, present: boolean) {
-    if (present) extensionHosts.add(element);
-    else extensionHosts.delete(element);
-}
+    for (const [id, element] of elements) {
+        const contentsId = contentsIdOf(element);
+        const url = element.getURL();
+        if (contentsId === null || !url.startsWith("http")) continue;
 
-function extensionContexts() {
-    const contexts = [...extensionHosts];
-
-    for (const element of elements.values()) {
-        if (element.getURL().startsWith("chrome-extension://")) contexts.push(element);
+        const active = id === activeId;
+        tabs.push({
+            id: contentsId, index: tabs.length, windowId: 0, url, title: element.getTitle(),
+            active, highlighted: active, selected: active, audible: getView(id).audible,
+            status: element.isLoading() ? "loading" : "complete",
+            pinned: false, incognito: false, discarded: false, autoDiscardable: true, frozen: false, groupId: -1
+        });
     }
 
-    return contexts;
+    return tabs;
 }
 
-/**
- * Electron's chrome.tabs never sees our guests, so extensions that wait for a tab
- * to finish loading, which is how OAuth redirects are picked up, never hear about
- * it. Feed the event to every extension context ourselves.
- */
+let knownTabs = new Map<string, number>();
+let lastActiveContents: number | null = null;
+
+let backgroundsReady = false;
+
+export function areBackgroundsReady() {
+    return backgroundsReady;
+}
+
+export function markBackgroundsReady() {
+    if (backgroundsReady) return;
+
+    backgroundsReady = true;
+    emitViews();
+}
+
+export function seedTabs() {
+    lastActiveContents = null;
+    pushTabs();
+}
+
+export function pushTabs() {
+    const tabs = tabSnapshot();
+    Native.emitExtensionEvent("tabs", tabs);
+
+    const present = new Map<string, number>();
+    for (const [id, element] of elements) {
+        const contentsId = contentsIdOf(element);
+        if (contentsId !== null) present.set(id, contentsId);
+    }
+
+    const open = new Set(ChannelTabsStore.getTabs().map(tab => browserIdOf(tab)));
+
+    for (const [id, contentsId] of knownTabs) {
+        if (present.has(id) || open.has(id)) continue;
+        Native.emitExtensionEvent("removed", contentsId);
+    }
+    knownTabs = present;
+
+    const active = (tabs.find(tab => (tab as { active: boolean; }).active) as { id: number; } | undefined)?.id ?? null;
+    if (active !== null && active !== lastActiveContents) {
+        Native.emitExtensionEvent("activated", active);
+    }
+    lastActiveContents = active;
+}
+
+export function emitNavigation(element: WebviewElement, kind: string) {
+    const id = contentsIdOf(element);
+    if (id === null) return;
+
+    const url = element.getURL();
+    if (!url.startsWith("http")) return;
+
+    const details = {
+        tabId: id, url, frameId: 0, parentFrameId: -1, processId: 0,
+        timeStamp: Date.now(), transitionType: "link", transitionQualifiers: [],
+        frameType: "outermost_frame", documentLifecycle: "active"
+    };
+
+    Native.emitExtensionEvent("navigate", { kind, details });
+}
+
 export function emitTabUpdate(element: WebviewElement) {
     const id = contentsIdOf(element);
     if (id === null) return;
 
     const tab = { id, url: element.getURL(), title: element.getTitle(), status: "complete", active: true, windowId: 0, index: 0 };
-    const payload = JSON.stringify({ id, changeInfo: { status: "complete", url: tab.url }, tab });
-    const code = `window.__vcIabTabs && window.__vcIabTabs.emit(${payload})`;
+    const payload = { id, changeInfo: { status: "complete", url: tab.url }, tab };
 
-    for (const context of extensionContexts()) {
-        context.executeJavaScript(code).catch(() => {
-            // a frozen or closing context, nothing to deliver to
-        });
-    }
+    pushTabs();
+    Native.emitExtensionEvent("update", payload);
 }
 
 function elementForContents(contentsId: number) {
@@ -290,6 +348,16 @@ async function applyFrozen(id: string, element: WebviewElement, next: boolean) {
 
 function activeBrowserId() {
     return tabsUsable() ? browserIdOf(ChannelTabsStore.getActiveTab()) : null;
+}
+
+let lastActiveBrowserId: string | null = null;
+
+function activeTabId() {
+    const id = activeBrowserId();
+    if (id !== null) lastActiveBrowserId = id;
+    else if (lastActiveBrowserId !== null && !elements.has(lastActiveBrowserId)) lastActiveBrowserId = null;
+
+    return id ?? lastActiveBrowserId;
 }
 
 function wakeActive() {
@@ -551,6 +619,7 @@ const RESTORE_WINDOW = 10_000;
 let restoreDeadline = 0;
 
 function onTabsChanged() {
+    pushTabs();
     wakeActive();
     syncActiveGuest();
     trackRestore();

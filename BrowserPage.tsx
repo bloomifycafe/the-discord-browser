@@ -15,18 +15,21 @@ import { ContextMenuApi, Menu, React, SettingsRouter, showToast, TextInput, Toas
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 
 import {
+    areBackgroundsReady,
     dropView,
+    emitNavigation,
     emitTabUpdate,
     extensionIdFromUrl,
     getElement,
     getView,
     handleTabsRequest,
     isDiscarded,
+    markBackgroundsReady,
     openBrowserTab,
     PARTITION,
     refreshAudible,
     registerElement,
-    registerExtensionHost,
+    seedTabs,
     settings,
     syncRouteUrl,
     takePendingUrl,
@@ -76,7 +79,7 @@ function PuzzleIcon() {
 
 type Extension = Awaited<ReturnType<typeof Native.getExtensions>>["extensions"][number];
 
-function BackgroundHost({ url }: { url: string; }) {
+function BackgroundHost({ url, onReady: ready }: { url: string; onReady: () => void; }) {
     const ref = useRef<WebviewElement>(null);
 
     useEffect(() => {
@@ -88,12 +91,14 @@ function BackgroundHost({ url }: { url: string; }) {
             if (event.channel === "vc-iab-tabs") handleTabsRequest(event.args?.[0] as never);
         };
 
-        registerExtensionHost(element, true);
+        const onReady = () => { seedTabs(); ready(); };
+
         element.addEventListener("ipc-message", onHostMessage as EventListener);
+        element.addEventListener("dom-ready", onReady);
 
         return () => {
-            registerExtensionHost(element, false);
             element.removeEventListener("ipc-message", onHostMessage as EventListener);
+            element.removeEventListener("dom-ready", onReady);
         };
     }, []);
 
@@ -108,16 +113,113 @@ function BackgroundHost({ url }: { url: string; }) {
 function BackgroundHosts() {
     const [pages, setPages] = useState<Array<{ id: string; name: string; url: string; }>>([]);
 
-    useEffect(() => { Native.getBackgroundPages().then(setPages); }, []);
+    const ready = useRef(new Set<string>());
+    const expected = useRef(0);
+
+    useEffect(() => {
+        Native.getBackgroundPages().then(result => {
+            expected.current = result.length;
+            setPages(result);
+            if (result.length === 0) markBackgroundsReady();
+        });
+
+        const fallback = setTimeout(markBackgroundsReady, 10_000);
+        return () => clearTimeout(fallback);
+    }, []);
 
     return (
         <div className={cl("backgrounds")} aria-hidden>
-            {pages.map(page => <BackgroundHost key={page.id} url={page.url} />)}
+            {pages.map(page => (
+                <BackgroundHost
+                    key={page.id}
+                    url={page.url}
+                    onReady={() => {
+                        ready.current.add(page.id);
+                        if (expected.current === 0 || ready.current.size < expected.current) return;
+
+                        setTimeout(markBackgroundsReady, 1500);
+                    }}
+                />
+            ))}
         </div>
     );
 }
 
-function ExtensionsMenu({ extensions }: { extensions: Extension[]; }) {
+const POPUP_MAX = { width: 800, height: 720 };
+
+function ExtensionPopup({ url, onClose }: { url: string; onClose: () => void; }) {
+    const ref = useRef<WebviewElement>(null);
+    const [size, setSize] = useState({ width: 360, height: 480 });
+
+    useEffect(() => {
+        const element = ref.current;
+        if (!element) return;
+
+        const measure = async () => {
+            const measured = await element.executeJavaScript(`(() => {
+                const root = document.documentElement;
+                const blocks = Array.from(document.body.children)
+                    .map(child => [child, child.getBoundingClientRect()])
+                    .filter(entry => entry[1].width > 0 && entry[1].height > 0);
+
+                const widest = blocks.length === 0 ? 0
+                    : Math.max(...blocks.map(entry => Math.max(entry[0].scrollWidth, entry[1].width)));
+                const tallest = blocks.length === 0 ? 0
+                    : Math.max(...blocks.map(entry => Math.max(entry[0].scrollHeight, entry[1].height)));
+
+                return [
+                    Math.max(widest, root.scrollWidth > window.innerWidth ? root.scrollWidth : 0),
+                    Math.max(tallest, root.scrollHeight > window.innerHeight ? root.scrollHeight : 0)
+                ];
+            })()`).catch(() => null) as [number, number] | null;
+
+            if (!measured) return;
+
+            const next = {
+                width: Math.min(Math.max(measured[0], 200), POPUP_MAX.width),
+                height: Math.min(Math.max(measured[1], 120), POPUP_MAX.height)
+            };
+
+            setSize(current => current.width === next.width && current.height === next.height ? current : next);
+        };
+
+        const onReady = () => {
+            seedTabs();
+            measure();
+        };
+
+        const timer = setInterval(measure, 300);
+        element.addEventListener("dom-ready", onReady);
+
+        return () => {
+            clearInterval(timer);
+            element.removeEventListener("dom-ready", onReady);
+        };
+    }, [url]);
+
+    useEffect(() => {
+        const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+        document.addEventListener("keydown", onKey);
+
+        return () => document.removeEventListener("keydown", onKey);
+    }, [onClose]);
+
+    return (
+        <>
+            <div className={cl("popup-scrim")} onClick={onClose} />
+            <div className={cl("popup")} style={size}>
+                {React.createElement("webview", {
+                    ref,
+                    src: url,
+                    partition: PARTITION,
+                    style: { width: "100%", height: "100%", display: "flex" }
+                })}
+            </div>
+        </>
+    );
+}
+
+function ExtensionsMenu({ extensions, onPopup }: { extensions: Extension[]; onPopup: (url: string) => void; }) {
     const usable = extensions.filter(extension => extension.loaded);
 
     return (
@@ -132,7 +234,9 @@ function ExtensionsMenu({ extensions }: { extensions: Extension[]; }) {
                         id={`vc-iab-ext-${extension.storeId}`}
                         label={extension.name}
                         disabled={!extension.popupUrl && !extension.optionsUrl}
-                        action={() => openBrowserTab(extension.popupUrl ?? extension.optionsUrl ?? undefined)}
+                        action={() => extension.popupUrl
+                            ? onPopup(extension.popupUrl)
+                            : openBrowserTab(extension.optionsUrl ?? undefined)}
                     />
                 ))}
             </Menu.MenuGroup>
@@ -165,7 +269,12 @@ function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
         const onNavigate = () => {
             updateView(id, { favicon: null });
             sync();
+            emitNavigation(element, "onCommitted");
         };
+
+        const onStartNavigation = () => emitNavigation(element, "onBeforeNavigate");
+        const onInPage = () => { sync(); emitNavigation(element, "onHistoryStateUpdated"); };
+        const onDomReady = () => { sync(); emitNavigation(element, "onDOMContentLoaded"); };
 
         const onFavicon = async (event: Event & { favicons?: string[]; }) => {
             const url = event.favicons?.[0];
@@ -174,6 +283,7 @@ function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
 
         const onStopLoading = () => {
             sync();
+            emitNavigation(element, "onCompleted");
             emitTabUpdate(element);
         };
 
@@ -190,10 +300,11 @@ function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
         element.addEventListener("ipc-message", onOpenTab as EventListener);
         element.addEventListener("media-started-playing", onMedia);
         element.addEventListener("media-paused", onMedia);
-        element.addEventListener("dom-ready", sync);
+        element.addEventListener("dom-ready", onDomReady);
         element.addEventListener("did-navigate", onNavigate);
-        element.addEventListener("did-navigate-in-page", sync);
+        element.addEventListener("did-navigate-in-page", onInPage);
         element.addEventListener("did-start-loading", sync);
+        element.addEventListener("did-start-navigation", onStartNavigation);
         element.addEventListener("did-stop-loading", onStopLoading);
         element.addEventListener("page-title-updated", sync);
         element.addEventListener("page-favicon-updated", onFavicon as EventListener);
@@ -203,10 +314,11 @@ function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
             element.removeEventListener("ipc-message", onOpenTab as EventListener);
             element.removeEventListener("media-started-playing", onMedia);
             element.removeEventListener("media-paused", onMedia);
-            element.removeEventListener("dom-ready", sync);
+            element.removeEventListener("dom-ready", onDomReady);
             element.removeEventListener("did-navigate", onNavigate);
-            element.removeEventListener("did-navigate-in-page", sync);
+            element.removeEventListener("did-navigate-in-page", onInPage);
             element.removeEventListener("did-start-loading", sync);
+            element.removeEventListener("did-start-navigation", onStartNavigation);
             element.removeEventListener("did-stop-loading", onStopLoading);
             element.removeEventListener("page-title-updated", sync);
             element.removeEventListener("page-favicon-updated", onFavicon as EventListener);
@@ -239,6 +351,7 @@ function BrowserChrome({ id }: { id: string; }) {
     const view = getView(id);
     const [address, setAddress] = useState(view.url);
     const [extensions, setExtensions] = useState<Extension[]>([]);
+    const [popup, setPopup] = useState<string | null>(null);
 
     const refreshExtensions = () => Native.getExtensions().then(result => setExtensions(result.extensions));
 
@@ -280,12 +393,15 @@ function BrowserChrome({ id }: { id: string; }) {
             <IconButton
                 label="Extensions"
                 onClick={event => {
-                    ContextMenuApi.openContextMenu(event, () => <ExtensionsMenu extensions={extensions} />);
+                    ContextMenuApi.openContextMenu(event, () => (
+                        <ExtensionsMenu extensions={extensions} onPopup={setPopup} />
+                    ));
                     refreshExtensions();
                 }}
             >
                 <PuzzleIcon />
             </IconButton>
+            {popup && <ExtensionPopup url={popup} onClose={() => setPopup(null)} />}
             {extensionId && (
                 <Button variant="primary" size="small" onClick={install}>
                     Install extension
@@ -339,7 +455,7 @@ export function BrowserFrame({ ids, activeId }: { ids: string[]; activeId: strin
             {chromeId !== null && <BrowserChrome id={chromeId} />}
             <BackgroundHosts />
             <div className={cl("stage")}>
-                {ids.filter(id => !isDiscarded(id)).map(id => (
+                {areBackgroundsReady() && ids.filter(id => !isDiscarded(id)).map(id => (
                     <WebviewFrame key={id} id={id} active={id === activeId} />
                 ))}
             </div>
