@@ -48,10 +48,6 @@
     visibility: visible;
 }
 
-.vc-iab-flip {
-    transform: rotate(180deg);
-}
-
 .vc-iab-spin {
     animation: vc-iab-spin 1s linear infinite;
 }

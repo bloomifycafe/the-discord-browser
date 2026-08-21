@@ -106,8 +106,6 @@ export interface ViewState {
     url: string;
     title: string;
     favicon: string | null;
-    canGoBack: boolean;
-    canGoForward: boolean;
     loading: boolean;
     audible: boolean;
 }
@@ -116,8 +114,6 @@ const EMPTY_VIEW: ViewState = {
     url: "",
     title: "",
     favicon: null,
-    canGoBack: false,
-    canGoForward: false,
     loading: false,
     audible: false
 };
@@ -466,13 +462,18 @@ export function syncRouteUrl(id: string, url: string) {
     });
 }
 
-export function keepBrowserTab(tab: TabEntry) {
+export function keepBrowserTab(tab: TabEntry, delta?: number) {
     const parsed = parseRoute(tab);
     if (!parsed) return false;
 
     const element = getElement(parsed.id);
-    if (element) applyFrozen(parsed.id, element, false);
-    if (parsed.url && element && element.getURL() !== parsed.url) element.loadURL(parsed.url);
+    if (!element) return true;
+
+    applyFrozen(parsed.id, element, false);
+
+    if (delta === -1 && element.canGoBack()) element.goBack();
+    else if (delta === 1 && element.canGoForward()) element.goForward();
+    else if (parsed.url && element.getURL() !== parsed.url) element.loadURL(parsed.url);
 
     return true;
 }

@@ -111,10 +111,16 @@ export default definePlugin({
         },
         {
             find: 'type:"CHANNEL_TABS_MOVE"',
-            replacement: {
-                match: /(?<="route"===\i\.kind\?)\(0,\i\.pX\)\(\i\.routePath\)/,
-                replace: "$self.keepBrowserTab(arguments[0])||$&"
-            }
+            replacement: [
+                {
+                    match: /(?<="route"===(\i)\.kind\?)\(0,\i\.pX\)\(\i\.routePath\)/,
+                    replace: "$self.keepBrowserTab($1)||$&"
+                },
+                {
+                    match: /(?<="CHANNEL_TABS_FORWARD"\}\),)\(0,\i\.pX\)\((\i)\.routePath\)/,
+                    replace: "$self.keepBrowserTab($1,arguments[0])||$&"
+                }
+            ]
         },
         {
             find: "PlusLargeIcon,onClick:",

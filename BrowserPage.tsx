@@ -7,7 +7,7 @@
 import "./style.css";
 
 import { Button } from "@components/Button";
-import { ResetIcon, RightArrow } from "@components/Icons";
+import { ResetIcon } from "@components/Icons";
 import { classNameFactory } from "@utils/css";
 import { classes } from "@utils/misc";
 import { PluginNative } from "@utils/types";
@@ -75,9 +75,7 @@ function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
         const sync = () => updateView(id, {
             url: element.getURL(),
             title: element.getTitle(),
-            loading: element.isLoading(),
-            canGoBack: element.canGoBack(),
-            canGoForward: element.canGoForward()
+            loading: element.isLoading()
         });
 
         const onNavigate = () => {
@@ -172,12 +170,6 @@ function BrowserChrome({ id }: { id: string; }) {
 
     return (
         <div className={cl("bar")} onKeyDown={handleKeyDown}>
-            <IconButton label="Back" disabled={!view.canGoBack} onClick={() => getElement(id)?.goBack()}>
-                <RightArrow className={cl("flip")} width={16} height={16} />
-            </IconButton>
-            <IconButton label="Forward" disabled={!view.canGoForward} onClick={() => getElement(id)?.goForward()}>
-                <RightArrow width={16} height={16} />
-            </IconButton>
             <IconButton label="Reload" onClick={() => getElement(id)?.reload()}>
                 <ResetIcon className={classes(view.loading && cl("spin"))} width={16} height={16} />
             </IconButton>
