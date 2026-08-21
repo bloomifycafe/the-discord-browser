@@ -16,14 +16,17 @@ import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 
 import {
     dropView,
+    emitTabUpdate,
     extensionIdFromUrl,
     getElement,
     getView,
+    handleTabsRequest,
     isDiscarded,
     openBrowserTab,
     PARTITION,
     refreshAudible,
     registerElement,
+    registerExtensionHost,
     settings,
     syncRouteUrl,
     takePendingUrl,
@@ -73,6 +76,35 @@ function PuzzleIcon() {
 
 type Extension = Awaited<ReturnType<typeof Native.getExtensions>>["extensions"][number];
 
+function BackgroundHost({ url }: { url: string; }) {
+    const ref = useRef<WebviewElement>(null);
+
+    useEffect(() => {
+        const element = ref.current;
+        if (!element) return;
+
+        const onHostMessage = (event: Event & { channel?: string; args?: unknown[]; }) => {
+            if (event.channel === "vc-iab-open-tab") openBrowserTab(String(event.args?.[0] ?? ""));
+            if (event.channel === "vc-iab-tabs") handleTabsRequest(event.args?.[0] as never);
+        };
+
+        registerExtensionHost(element, true);
+        element.addEventListener("ipc-message", onHostMessage as EventListener);
+
+        return () => {
+            registerExtensionHost(element, false);
+            element.removeEventListener("ipc-message", onHostMessage as EventListener);
+        };
+    }, []);
+
+    return React.createElement("webview", {
+        ref,
+        src: url,
+        partition: PARTITION,
+        style: { width: "100%", height: "100%", display: "flex" }
+    });
+}
+
 function BackgroundHosts() {
     const [pages, setPages] = useState<Array<{ id: string; name: string; url: string; }>>([]);
 
@@ -80,12 +112,7 @@ function BackgroundHosts() {
 
     return (
         <div className={cl("backgrounds")} aria-hidden>
-            {pages.map(page => React.createElement("webview", {
-                key: page.id,
-                src: page.url,
-                partition: PARTITION,
-                style: { width: "100%", height: "100%", display: "flex" }
-            }))}
+            {pages.map(page => <BackgroundHost key={page.id} url={page.url} />)}
         </div>
     );
 }
@@ -145,30 +172,42 @@ function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
             updateView(id, { favicon: url ? await Native.fetchFavicon(url) : null });
         };
 
+        const onStopLoading = () => {
+            sync();
+            emitTabUpdate(element);
+        };
+
+        const onOpenTab = (event: Event & { channel?: string; args?: unknown[]; }) => {
+            if (event.channel === "vc-iab-open-tab") openBrowserTab(String(event.args?.[0] ?? ""));
+            if (event.channel === "vc-iab-tabs") handleTabsRequest(event.args?.[0] as never);
+        };
+
         const onMedia = () => {
             refreshAudible(id);
             setTimeout(() => refreshAudible(id), 500);
         };
 
+        element.addEventListener("ipc-message", onOpenTab as EventListener);
         element.addEventListener("media-started-playing", onMedia);
         element.addEventListener("media-paused", onMedia);
         element.addEventListener("dom-ready", sync);
         element.addEventListener("did-navigate", onNavigate);
         element.addEventListener("did-navigate-in-page", sync);
         element.addEventListener("did-start-loading", sync);
-        element.addEventListener("did-stop-loading", sync);
+        element.addEventListener("did-stop-loading", onStopLoading);
         element.addEventListener("page-title-updated", sync);
         element.addEventListener("page-favicon-updated", onFavicon as EventListener);
 
         return () => {
             registerElement(id, null);
+            element.removeEventListener("ipc-message", onOpenTab as EventListener);
             element.removeEventListener("media-started-playing", onMedia);
             element.removeEventListener("media-paused", onMedia);
             element.removeEventListener("dom-ready", sync);
             element.removeEventListener("did-navigate", onNavigate);
             element.removeEventListener("did-navigate-in-page", sync);
             element.removeEventListener("did-start-loading", sync);
-            element.removeEventListener("did-stop-loading", sync);
+            element.removeEventListener("did-stop-loading", onStopLoading);
             element.removeEventListener("page-title-updated", sync);
             element.removeEventListener("page-favicon-updated", onFavicon as EventListener);
             dropView(id);

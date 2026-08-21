@@ -100,6 +100,7 @@ export interface WebviewElement extends HTMLElement {
     loadURL(url: string): Promise<void>;
     isCurrentlyAudible(): boolean;
     getWebContentsId(): number;
+    executeJavaScript(code: string): Promise<unknown>;
 }
 
 export interface ViewState {
@@ -181,6 +182,73 @@ function syncActiveGuest() {
 
 export function getElement(id: string) {
     return elements.get(id);
+}
+
+const extensionHosts = new Set<WebviewElement>();
+
+export function registerExtensionHost(element: WebviewElement, present: boolean) {
+    if (present) extensionHosts.add(element);
+    else extensionHosts.delete(element);
+}
+
+function extensionContexts() {
+    const contexts = [...extensionHosts];
+
+    for (const element of elements.values()) {
+        if (element.getURL().startsWith("chrome-extension://")) contexts.push(element);
+    }
+
+    return contexts;
+}
+
+/**
+ * Electron's chrome.tabs never sees our guests, so extensions that wait for a tab
+ * to finish loading, which is how OAuth redirects are picked up, never hear about
+ * it. Feed the event to every extension context ourselves.
+ */
+export function emitTabUpdate(element: WebviewElement) {
+    const id = contentsIdOf(element);
+    if (id === null) return;
+
+    const tab = { id, url: element.getURL(), title: element.getTitle(), status: "complete", active: true, windowId: 0, index: 0 };
+    const payload = JSON.stringify({ id, changeInfo: { status: "complete", url: tab.url }, tab });
+    const code = `window.__vcIabTabs && window.__vcIabTabs.emit(${payload})`;
+
+    for (const context of extensionContexts()) {
+        context.executeJavaScript(code).catch(() => {
+            // a frozen or closing context, nothing to deliver to
+        });
+    }
+}
+
+function elementForContents(contentsId: number) {
+    for (const [id, element] of elements) {
+        if (contentsIdOf(element) === contentsId) return { id, element };
+    }
+
+    return null;
+}
+
+export function handleTabsRequest(data: { __vcIab: string; tabId?: number; url?: string; tabIds?: number[]; }) {
+    if (data.__vcIab === "tabs-update") {
+        const target = data.tabId == null ? null : elementForContents(data.tabId);
+        if (data.url) (target?.element ?? getElement(activeBrowserId() ?? ""))?.loadURL(data.url);
+        return;
+    }
+
+    for (const contentsId of data.tabIds ?? []) {
+        const target = elementForContents(contentsId);
+        if (target) closeBrowserTab(target.id);
+    }
+}
+
+function closeBrowserTab(browserId: string) {
+    for (const tab of ChannelTabsStore.getTabs()) {
+        if (browserIdOf(tab) !== browserId) continue;
+
+        FluxDispatcher.dispatch({ type: "CHANNEL_TABS_CLOSE", tabId: tab.id });
+        return;
+    }
 }
 
 const discarded = new Set<string>();

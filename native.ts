@@ -259,6 +259,62 @@ const SHIM_SOURCE = `
             return Promise.resolve(value);
         };
 
+        if (chrome.tabs != null && typeof chrome.tabs.create !== "function") {
+            chrome.tabs.create = (properties, callback) => {
+                const url = typeof properties === "string" ? properties : properties?.url;
+                window.postMessage({ __vcIab: "tabs-create", url }, "*");
+
+                const tab = { id: -1, index: 0, windowId: 0, url, pendingUrl: url, active: properties?.active !== false,
+                    pinned: false, highlighted: false, incognito: false, selected: false, discarded: false,
+                    autoDiscardable: true, frozen: false, groupId: -1, status: "loading" };
+
+                if (typeof callback === "function") callback(tab);
+                return Promise.resolve(tab);
+            };
+        }
+
+        const tabListeners = new Set();
+
+        window.__vcIabTabs = {
+            emit(payload) {
+                for (const listener of tabListeners) {
+                    try {
+                        listener(payload.id, payload.changeInfo, payload.tab);
+                    } catch (error) {
+                        console.error("[vc-iab] tabs.onUpdated listener failed", error);
+                    }
+                }
+            }
+        };
+
+        if (chrome.tabs != null) {
+            chrome.tabs.onUpdated = {
+                addListener: listener => tabListeners.add(listener),
+                removeListener: listener => tabListeners.delete(listener),
+                hasListener: listener => tabListeners.has(listener)
+            };
+
+            chrome.tabs.update = (tabId, properties, callback) => {
+                if (typeof tabId === "object" && tabId !== null) {
+                    callback = properties;
+                    properties = tabId;
+                    tabId = null;
+                }
+
+                window.postMessage({ __vcIab: "tabs-update", tabId, url: properties?.url }, "*");
+
+                const tab = { id: tabId ?? -1, url: properties?.url, active: true, windowId: 0, index: 0 };
+                if (typeof callback === "function") callback(tab);
+                return Promise.resolve(tab);
+            };
+
+            chrome.tabs.remove = (tabIds, callback) => {
+                window.postMessage({ __vcIab: "tabs-remove", tabIds: Array.isArray(tabIds) ? tabIds : [tabIds] }, "*");
+                if (typeof callback === "function") callback();
+                return Promise.resolve();
+            };
+        }
+
         const action = {
             setBadgeBackgroundColor: settle(),
             setBadgeTextColor: settle(),
@@ -398,23 +454,33 @@ try {
     const { ipcRenderer, webFrame } = require("electron");
     const extensionId = location.protocol === "chrome-extension:" ? location.hostname : null;
 
-    if (extensionId !== null && allowed[extensionId] === true) {
-        window.addEventListener("message", async event => {
-            const data = event.data;
-            if (event.source !== window || data?.__vcIab !== "stage") return;
+    const scriptsAllowed = extensionId !== null && allowed[extensionId] === true;
 
-            try {
-                const result = await ipcRenderer.invoke("vc-iab-stage-user-scripts", extensionId, data.scripts);
-                window.postMessage({ __vcIab: "reply", id: data.id, result }, "*");
-            } catch (error) {
-                window.postMessage({ __vcIab: "reply", id: data.id, error: String(error) }, "*");
-            }
-        });
+    window.addEventListener("message", async event => {
+        const data = event.data;
+        if (event.source !== window) return;
 
-        webFrame.executeJavaScript(source + userScripts);
-    } else {
-        webFrame.executeJavaScript(source);
-    }
+        if (data?.__vcIab === "tabs-create") {
+            ipcRenderer.sendToHost("vc-iab-open-tab", data.url);
+            return;
+        }
+
+        if (data?.__vcIab === "tabs-update" || data?.__vcIab === "tabs-remove") {
+            ipcRenderer.sendToHost("vc-iab-tabs", data);
+            return;
+        }
+
+        if (data?.__vcIab !== "stage" || !scriptsAllowed) return;
+
+        try {
+            const result = await ipcRenderer.invoke("vc-iab-stage-user-scripts", extensionId, data.scripts);
+            window.postMessage({ __vcIab: "reply", id: data.id, result }, "*");
+        } catch (error) {
+            window.postMessage({ __vcIab: "reply", id: data.id, error: String(error) }, "*");
+        }
+    });
+
+    webFrame.executeJavaScript(scriptsAllowed ? source + userScripts : source);
 } catch {
     try { (0, eval)(source); } catch { /* the context blocks both, nothing else to try */ }
 }
