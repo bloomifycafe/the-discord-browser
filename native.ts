@@ -5,7 +5,7 @@
  */
 
 import { DATA_DIR } from "@main/utils/constants";
-import electron, { clipboard, type IpcMainInvokeEvent, Menu, session, shell, webContents } from "electron";
+import electron, { clipboard, type IpcMainInvokeEvent, Menu, MenuItem, session, shell, webContents } from "electron";
 import { unzipSync } from "fflate";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join, normalize as normalizePath } from "path";
@@ -335,6 +335,9 @@ if (isEnabled()) {
         entry.exports = { ...electron, BrowserWindow };
     }
 
+    const { buildFromTemplate } = Menu;
+    Menu.buildFromTemplate = template => buildFromTemplate(retargetDevTools(template));
+
     electron.app.whenReady().then(() => {
         const browsing = session.fromPartition(PARTITION);
         browsing.setUserAgent(browserUserAgent(browsing.getUserAgent()));
@@ -406,7 +409,9 @@ if (isEnabled()) {
                 { label: "Reload", click: () => contents.reload() },
                 { type: "separator" },
                 { label: "Select all", click: () => contents.selectAll() },
-                { label: "Open in default browser", click: () => shell.openExternal(params.pageURL) }
+                { label: "Open in default browser", click: () => shell.openExternal(params.pageURL) },
+                { type: "separator" },
+                { label: "Inspect element", click: () => contents.inspectElement(params.x, params.y) }
             );
 
             Menu.buildFromTemplate(template).popup({ window: electron.BrowserWindow.getFocusedWindow() ?? undefined });
@@ -420,6 +425,36 @@ if (isEnabled()) {
             if (!isWebUrl(url) && !url.startsWith("chrome-extension://")) event.preventDefault();
         });
     });
+}
+
+let activeGuestId: number | null = null;
+
+export function setActiveGuest(_: IpcMainInvokeEvent, webContentsId: number | null) {
+    activeGuestId = webContentsId;
+}
+
+function devToolsTarget() {
+    const guest = activeGuestId === null ? null : webContents.fromId(activeGuestId);
+    if (guest && !guest.isDestroyed()) return guest;
+
+    return electron.BrowserWindow.getFocusedWindow()?.webContents;
+}
+
+type MenuTemplate = Array<Electron.MenuItemConstructorOptions | MenuItem>;
+
+function retargetDevTools(template: MenuTemplate) {
+    for (const item of template) {
+        if (item instanceof MenuItem) continue;
+        if (Array.isArray(item.submenu)) retargetDevTools(item.submenu);
+        if (item.role !== "toggleDevTools") continue;
+
+        delete item.role;
+        item.label ??= "Toggle Developer Tools";
+        item.accelerator ??= process.platform === "darwin" ? "Alt+Command+I" : "Ctrl+Shift+I";
+        item.click = () => devToolsTarget()?.toggleDevTools();
+    }
+
+    return template;
 }
 
 function isWebUrl(target: string) {

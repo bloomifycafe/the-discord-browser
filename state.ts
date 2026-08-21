@@ -168,11 +168,19 @@ export function registerElement(id: string, element: WebviewElement | null) {
     if (element) {
         elements.set(id, element);
         lastActive.set(id, Date.now());
-        return;
+    } else {
+        elements.delete(id);
+        frozen.delete(id);
     }
 
-    elements.delete(id);
-    frozen.delete(id);
+    syncActiveGuest();
+}
+
+function syncActiveGuest() {
+    const id = activeBrowserId();
+    const element = id === null ? undefined : elements.get(id);
+
+    Native.setActiveGuest(element ? contentsIdOf(element) : null);
 }
 
 export function getElement(id: string) {
@@ -475,6 +483,7 @@ let restoreDeadline = 0;
 
 function onTabsChanged() {
     wakeActive();
+    syncActiveGuest();
     trackRestore();
 }
 

@@ -120,6 +120,13 @@ function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
         };
     }, [id]);
 
+    useEffect(() => {
+        const element = ref.current;
+        if (!element) return;
+
+        if (active) element.focus();
+    }, [active]);
+
     return (
         <div className={cl("view", { active })}>
             {React.createElement("webview", {
