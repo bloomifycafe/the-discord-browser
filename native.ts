@@ -1770,20 +1770,21 @@ async function loadExtensions() {
 }
 
 function withChromeBrand(value: string) {
-    if (value.includes('"Google Chrome"')) return value;
+    return value;
+    //if (value.includes('"Google Chrome"')) return value;
 
-    const chromium = value.match(/"Chromium";v="([^"]+)"/);
-    if (!chromium) return value;
+    //const chromium = value.match(/"Chromium";v="([^"]+)"/);
+    //if (!chromium) return value;
 
-    return value.replace(chromium[0], `"Google Chrome";v="${chromium[1]}", ${chromium[0]}`);
+    //return value.replace(chromium[0], `"Google Chrome";v="${chromium[1]}", ${chromium[0]}`);
 }
 
 function browserUserAgent(userAgent: string) {
     return userAgent
-        .replace(/\s*discord\/\S+/gi, "")
-        .replace(/\s*Electron\/\S+/gi, "")
-        .replace(/\s{2,}/g, " ")
-        .trim();
+        //.replace(/\s*discord\/\S+/gi, "")
+        //.replace(/\s*Electron\/\S+/gi, "")
+        //.replace(/\s{2,}/g, " ")
+        //.trim();
 }
 
 function pluginSettings() {
