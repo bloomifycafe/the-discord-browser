@@ -424,6 +424,17 @@ function recoverWorker(folder: string) {
 
 const SHIM_SOURCE = `
 (() => {
+    document.addEventListener("click", event => {
+        if (event.defaultPrevented || event.button !== 0
+            || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+        const link = event.target.closest ? event.target.closest("a[target='_blank']") : null;
+        if (!link || !link.href) return;
+
+        event.preventDefault();
+        window.postMessage({ __vcIab: "tabs-create", url: link.href }, "*");
+    });
+
     const install = () => {
         if (typeof chrome === "undefined" || chrome === null) return false;
 
