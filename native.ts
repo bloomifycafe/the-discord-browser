@@ -462,6 +462,35 @@ function recoverWorker(folder: string) {
 
 const SHIM_SOURCE = `
 (() => {
+    window.__vcIabOpenTab = (url, name) => {
+        let resolved = null;
+        try {
+            if (typeof url === "string" && url.length > 0) resolved = new URL(url, location.href);
+        } catch {
+            resolved = null;
+        }
+
+        if (!resolved || (resolved.protocol !== "http:" && resolved.protocol !== "https:")) return null;
+
+        const reusable = name && name !== "_blank" ? name : null;
+        window.postMessage({ __vcIab: "tabs-create", url: resolved.href, name: reusable }, "*");
+
+        let closed = false;
+        return {
+            get closed() { return closed; },
+            focus() { },
+            blur() { },
+            close() { closed = true; },
+            postMessage() { },
+            location: { href: resolved.href }
+        };
+    };
+
+    if (typeof window.open === "function") {
+        const nativeOpen = window.open.bind(window);
+        window.open = (url, target, features) => window.__vcIabOpenTab(url, target) ?? nativeOpen(url, target, features);
+    }
+
     document.addEventListener("click", event => {
         if (event.defaultPrevented || event.button !== 0
             || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -469,8 +498,7 @@ const SHIM_SOURCE = `
         const link = event.target.closest ? event.target.closest("a[target='_blank']") : null;
         if (!link || !link.href) return;
 
-        event.preventDefault();
-        window.postMessage({ __vcIab: "tabs-create", url: link.href }, "*");
+        if (window.__vcIabOpenTab(link.href, null)) event.preventDefault();
     });
 
     const install = () => {
@@ -748,7 +776,7 @@ const SHIM_SOURCE = `
         if (chrome.tabs != null && typeof chrome.tabs.create !== "function") {
             chrome.tabs.create = (properties, callback) => {
                 const url = typeof properties === "string" ? properties : properties?.url;
-                window.postMessage({ __vcIab: "tabs-create", url }, "*");
+                window.__vcIabOpenTab(url, null);
 
                 const tab = { id: -1, index: 0, windowId: 0, url, pendingUrl: url, active: properties?.active !== false,
                     pinned: false, highlighted: false, incognito: false, selected: false, discarded: false,
@@ -1445,7 +1473,7 @@ try {
         if (event.source !== window) return;
 
         if (data?.__vcIab === "tabs-create") {
-            ipcRenderer.sendToHost("vc-iab-open-tab", data.url);
+            ipcRenderer.sendToHost("vc-iab-open-tab", { url: data.url, name: data.name ?? null });
             return;
         }
 
@@ -2055,7 +2083,7 @@ function retargetDevTools(template: MenuTemplate) {
 
 function requestNewTab(contents: Electron.WebContents, url: string) {
     contents.executeJavaScript(
-        `window.postMessage(${JSON.stringify({ __vcIab: "tabs-create", url })}, "*")`
+        `window.__vcIabOpenTab && window.__vcIabOpenTab(${JSON.stringify(url)}, null)`
     ).catch(() => { });
 }
 

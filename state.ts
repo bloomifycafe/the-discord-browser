@@ -287,6 +287,11 @@ function elementForContents(contentsId: number) {
     return null;
 }
 
+export function handleOpenTabMessage(args: unknown[]) {
+    const data = args[0] as { url?: string; name?: string | null; } | undefined;
+    openBrowserTab(data?.url, data?.name);
+}
+
 export function handleTabsRequest(data: { __vcIab: string; tabId?: number; url?: string; tabIds?: number[]; }) {
     if (data.__vcIab === "tabs-update") {
         const target = data.tabId == null ? null : elementForContents(data.tabId);
@@ -559,14 +564,43 @@ export function setBrowserOpen(value: boolean) {
     });
 }
 
-export function openBrowserTab(url?: string) {
+const namedTabs = new Map<string, string>();
+
+/**
+ * window.open(url, name) with a name real browsers already know reuses whatever it opened
+ * last time instead of piling up a new one on every call, and this is the only place with
+ * the state needed to do that: which of our tabs is still open, and which Discord tab hosts
+ * it now that Discord's own tab id has nothing to do with the one we handed out.
+ */
+function existingNamedTab(name: string) {
+    const id = namedTabs.get(name);
+    if (id === undefined) return null;
+
+    const tab = ChannelTabsStore.getTabs().find(entry => browserIdOf(entry) === id);
+    if (!tab) {
+        namedTabs.delete(name);
+        return null;
+    }
+
+    return { id, tab };
+}
+
+export function openBrowserTab(url?: string, name?: string | null) {
     if (!tabsUsable()) {
         showToast("Browser tabs need Discord's tabs enabled.", Toasts.Type.FAILURE);
         return;
     }
 
+    const existing = name ? existingNamedTab(name) : null;
+    if (existing) {
+        if (url) getElement(existing.id)?.loadURL(url);
+        FluxDispatcher.dispatch({ type: "CHANNEL_TABS_SET_ACTIVE", tabId: existing.tab.id });
+        return;
+    }
+
     const id = nextId();
     pending = url ? { id, url } : null;
+    if (name) namedTabs.set(name, id);
 
     FluxDispatcher.dispatch({
         type: "CHANNEL_TABS_OPEN",

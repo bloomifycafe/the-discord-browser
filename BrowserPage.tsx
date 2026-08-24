@@ -22,6 +22,7 @@ import {
     extensionIdFromUrl,
     getElement,
     getView,
+    handleOpenTabMessage,
     handleTabsRequest,
     isDiscarded,
     markBackgroundsReady,
@@ -87,7 +88,7 @@ function BackgroundHost({ url, onReady: ready }: { url: string; onReady: () => v
         if (!element) return;
 
         const onHostMessage = (event: Event & { channel?: string; args?: unknown[]; }) => {
-            if (event.channel === "vc-iab-open-tab") openBrowserTab(String(event.args?.[0] ?? ""));
+            if (event.channel === "vc-iab-open-tab") handleOpenTabMessage(event.args ?? []);
             if (event.channel === "vc-iab-tabs") handleTabsRequest(event.args?.[0] as never);
         };
 
@@ -189,7 +190,7 @@ function ExtensionPopup({ url, onClose }: { url: string; onClose: () => void; })
         };
 
         const onOpenTab = (event: Event & { channel?: string; args?: unknown[]; }) => {
-            if (event.channel === "vc-iab-open-tab") openBrowserTab(String(event.args?.[0] ?? ""));
+            if (event.channel === "vc-iab-open-tab") handleOpenTabMessage(event.args ?? []);
         };
 
         const timer = setInterval(measure, 300);
@@ -294,7 +295,7 @@ function WebviewFrame({ id, active }: { id: string; active: boolean; }) {
         };
 
         const onOpenTab = (event: Event & { channel?: string; args?: unknown[]; }) => {
-            if (event.channel === "vc-iab-open-tab") openBrowserTab(String(event.args?.[0] ?? ""));
+            if (event.channel === "vc-iab-open-tab") handleOpenTabMessage(event.args ?? []);
             if (event.channel === "vc-iab-tabs") handleTabsRequest(event.args?.[0] as never);
         };
 
