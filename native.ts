@@ -362,6 +362,44 @@ const BG_SHIM_SOURCE = `
 
 const moduleWorkers = new Set<string>();
 
+const CONTENT_PATCH = "vc-iab-content-patch.js";
+
+const CONTENT_PATCH_SOURCE = `
+if (typeof chrome !== "undefined" && chrome !== null) {
+    if (typeof window.browser === "undefined" || window.browser !== chrome) window.browser = chrome;
+
+    if (chrome.storage != null && chrome.storage.sync != null && chrome.storage.local != null) {
+        for (const method of ["get", "getKeys", "set", "remove", "clear", "getBytesInUse", "setAccessLevel"]) {
+            if (typeof chrome.storage.local[method] === "function") {
+                chrome.storage.sync[method] = chrome.storage.local[method].bind(chrome.storage.local);
+            }
+        }
+    }
+}
+`;
+
+function prepareContentScripts(folder: string) {
+    const manifestPath = join(folder, "manifest.json");
+
+    try {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        const scripts = manifest?.content_scripts;
+        if (!Array.isArray(scripts) || scripts.length === 0) return;
+
+        writeFileSync(join(folder, CONTENT_PATCH), CONTENT_PATCH_SOURCE);
+
+        let changed = false;
+        for (const entry of scripts) {
+            if (!Array.isArray(entry?.js) || entry.js[0] === CONTENT_PATCH) continue;
+
+            entry.js.unshift(CONTENT_PATCH);
+            changed = true;
+        }
+
+        if (changed) writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    } catch {}
+}
+
 function prepareBackground(folder: string) {
     const manifestPath = join(folder, "manifest.json");
 
@@ -437,6 +475,8 @@ const SHIM_SOURCE = `
 
     const install = () => {
         if (typeof chrome === "undefined" || chrome === null) return false;
+
+        if (typeof window.browser === "undefined" || window.browser !== chrome) window.browser = chrome;
 
         const noop = () => {};
         const event = () => ({ addListener: noop, removeListener: noop, hasListener: () => false });
@@ -905,15 +945,33 @@ const SHIM_SOURCE = `
             onErrorOccurred: listenerGroup(navigationListeners.onErrorOccurred)
         };
 
+        const granted = window.__vcIabPermissions || { permissions: [], origins: [] };
+
         chrome.permissions = {
-            contains: settle(true),
-            getAll: settle({ permissions: [], origins: [] }),
+            contains: (query, callback) => {
+                const wantedPerms = query?.permissions ?? [];
+                const wantedOrigins = query?.origins ?? [];
+                const ok = wantedPerms.every(p => granted.permissions.includes(p))
+                    && wantedOrigins.every(o => granted.origins.includes(o));
+
+                if (typeof callback === "function") callback(ok);
+                return Promise.resolve(ok);
+            },
+            getAll: settle(granted),
             request: settle(false),
             remove: settle(false),
             ...chrome.permissions,
             onAdded: chrome.permissions?.onAdded ?? event(),
             onRemoved: chrome.permissions?.onRemoved ?? event()
         };
+
+        if (chrome.storage != null && chrome.storage.sync != null && chrome.storage.local != null) {
+            for (const method of ["get", "getKeys", "set", "remove", "clear", "getBytesInUse", "setAccessLevel"]) {
+                if (typeof chrome.storage.local[method] === "function") {
+                    chrome.storage.sync[method] = chrome.storage.local[method].bind(chrome.storage.local);
+                }
+            }
+        }
 
         if (!chrome.notifications) {
             chrome.notifications = {
@@ -1373,6 +1431,8 @@ const SW_WRAPPER = ${JSON.stringify(SW_WRAPPER)};
 const hostedBackgroundIds = ${JSON.stringify(loadedExtensions
         .filter(extension => extension.backgroundPage !== null)
         .map(extension => extension.id))};
+const permissionsByExtension = ${JSON.stringify(Object.fromEntries(loadedExtensions
+        .map(extension => [extension.id, { permissions: extension.permissions, origins: extension.hostPermissions }])))};
 const USER_SCRIPT_WORLD = ${USER_SCRIPT_WORLD};
 const USER_SCRIPT_CSP = ${JSON.stringify(USER_SCRIPT_CSP)};
 
@@ -1478,8 +1538,11 @@ try {
         seeded = [];
     }
 
+    const grantedPermissions = permissionsByExtension[extensionId] ?? { permissions: [], origins: [] };
+
     const hosted = "window.__vcIabHosted = " + JSON.stringify(hostedBackgroundIds) + ";"
-        + "window.__vcIabTabsSeed = " + JSON.stringify(seeded) + ";";
+        + "window.__vcIabTabsSeed = " + JSON.stringify(seeded) + ";"
+        + "window.__vcIabPermissions = " + JSON.stringify(grantedPermissions) + ";";
 
     webFrame.executeJavaScript(extensionId === null ? source : hosted + source + userScripts);
 
@@ -1744,6 +1807,8 @@ interface ExtensionInfo {
     popupPage: string | null;
     icon: string | null;
     backgroundPage: string | null;
+    permissions: string[];
+    hostPermissions: string[];
 }
 
 const loadedExtensions: ExtensionInfo[] = [];
@@ -1760,6 +1825,7 @@ async function loadExtensions() {
         const folder = join(EXTENSIONS_DIR, entry.name);
         if (!existsSync(join(folder, "manifest.json"))) continue;
 
+        prepareContentScripts(folder);
         const backgroundPage = prepareBackground(folder);
 
         try {
@@ -1772,7 +1838,9 @@ async function loadExtensions() {
                 optionsPage: optionsPageOf(extension.manifest),
                 popupPage: popupPageOf(extension.manifest),
                 icon: iconOf(extension.manifest, folder),
-                backgroundPage
+                backgroundPage,
+                permissions: Array.isArray(extension.manifest?.permissions) ? extension.manifest.permissions : [],
+                hostPermissions: Array.isArray(extension.manifest?.host_permissions) ? extension.manifest.host_permissions : []
             });
         } catch (error) {
             extensionFailures.push({ folder: entry.name, error: String(error).slice(0, 300) });
@@ -2123,6 +2191,7 @@ export async function installExtension(_: IpcMainInvokeEvent, extensionId: strin
             loadedExtensions.splice(existing, 1);
         }
 
+        prepareContentScripts(folder);
         const extension = await browsing.extensions.loadExtension(folder, { allowFileAccess: true });
         loadedExtensions.push({
             id: extension.id,
@@ -2132,7 +2201,9 @@ export async function installExtension(_: IpcMainInvokeEvent, extensionId: strin
             optionsPage: optionsPageOf(extension.manifest),
             popupPage: popupPageOf(extension.manifest),
             icon: iconOf(extension.manifest, folder),
-            backgroundPage: prepareBackground(folder)
+            backgroundPage: prepareBackground(folder),
+            permissions: Array.isArray(extension.manifest?.permissions) ? extension.manifest.permissions : [],
+            hostPermissions: Array.isArray(extension.manifest?.host_permissions) ? extension.manifest.host_permissions : []
         });
 
         return { ok: true, name: extension.name };
