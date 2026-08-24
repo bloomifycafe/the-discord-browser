@@ -1769,22 +1769,26 @@ async function loadExtensions() {
     }
 }
 
+const CHROME_BRAND_SPOOFING = false;
+
 function withChromeBrand(value: string) {
-    return value;
-    //if (value.includes('"Google Chrome"')) return value;
+    if (!CHROME_BRAND_SPOOFING) return value;
+    if (value.includes('"Google Chrome"')) return value;
 
-    //const chromium = value.match(/"Chromium";v="([^"]+)"/);
-    //if (!chromium) return value;
+    const chromium = value.match(/"Chromium";v="([^"]+)"/);
+    if (!chromium) return value;
 
-    //return value.replace(chromium[0], `"Google Chrome";v="${chromium[1]}", ${chromium[0]}`);
+    return value.replace(chromium[0], `"Google Chrome";v="${chromium[1]}", ${chromium[0]}`);
 }
 
 function browserUserAgent(userAgent: string) {
+    if (!CHROME_BRAND_SPOOFING) return userAgent;
+
     return userAgent
-        //.replace(/\s*discord\/\S+/gi, "")
-        //.replace(/\s*Electron\/\S+/gi, "")
-        //.replace(/\s{2,}/g, " ")
-        //.trim();
+        .replace(/\s*discord\/\S+/gi, "")
+        .replace(/\s*Electron\/\S+/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
 }
 
 function pluginSettings() {
@@ -1885,6 +1889,7 @@ if (isEnabled()) {
             if (params.linkURL) {
                 template.push(
                     { label: "Open link", click: () => contents.loadURL(params.linkURL) },
+                    { label: "Open link in new tab", click: () => requestNewTab(contents, params.linkURL) },
                     { label: "Copy link address", click: () => clipboard.writeText(params.linkURL) },
                     { type: "separator" }
                 );
@@ -1930,7 +1935,7 @@ if (isEnabled()) {
         });
 
         contents.setWindowOpenHandler(({ url }) => {
-            if (isWebUrl(url)) contents.loadURL(url);
+            if (isWebUrl(url)) requestNewTab(contents, url);
             return { action: "deny" };
         });
         contents.on("will-navigate", (event, url) => {
@@ -1967,6 +1972,12 @@ function retargetDevTools(template: MenuTemplate) {
     }
 
     return template;
+}
+
+function requestNewTab(contents: Electron.WebContents, url: string) {
+    contents.executeJavaScript(
+        `window.postMessage(${JSON.stringify({ __vcIab: "tabs-create", url })}, "*")`
+    ).catch(() => { });
 }
 
 function isWebUrl(target: string) {

@@ -188,12 +188,18 @@ function ExtensionPopup({ url, onClose }: { url: string; onClose: () => void; })
             measure();
         };
 
+        const onOpenTab = (event: Event & { channel?: string; args?: unknown[]; }) => {
+            if (event.channel === "vc-iab-open-tab") openBrowserTab(String(event.args?.[0] ?? ""));
+        };
+
         const timer = setInterval(measure, 300);
         element.addEventListener("dom-ready", onReady);
+        element.addEventListener("ipc-message", onOpenTab as EventListener);
 
         return () => {
             clearInterval(timer);
             element.removeEventListener("dom-ready", onReady);
+            element.removeEventListener("ipc-message", onOpenTab as EventListener);
         };
     }, [url]);
 
