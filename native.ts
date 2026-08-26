@@ -501,6 +501,14 @@ const SHIM_SOURCE = `
         if (window.__vcIabOpenTab(link.href, null)) event.preventDefault();
     });
 
+    document.addEventListener("mouseup", event => {
+        if (event.defaultPrevented || (event.button !== 3 && event.button !== 4)) return;
+
+        event.preventDefault();
+        if (event.button === 3) history.back();
+        else history.forward();
+    });
+
     const install = () => {
         if (typeof chrome === "undefined" || chrome === null) return false;
 
