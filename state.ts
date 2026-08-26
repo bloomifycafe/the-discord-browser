@@ -63,6 +63,11 @@ export const settings = definePluginSettings({
         description: "Show a browser button in the top bar that turns the current tab into a browser.",
         default: false
     },
+    newTabOpensBrowser: {
+        type: OptionType.BOOLEAN,
+        description: "Make the new tab button open a browser tab directly, instead of asking which kind of tab to open.",
+        default: false
+    },
     openLinksInTabs: {
         type: OptionType.BOOLEAN,
         description: "Open links from Discord in a browser tab instead of your default browser.",

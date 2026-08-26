@@ -189,6 +189,11 @@ export default definePlugin({
     },
 
     openNewTabMenu(event: MouseEvent, createDiscordTab: () => void) {
+        if (settings.store.newTabOpensBrowser) {
+            openBrowserTab();
+            return;
+        }
+
         ContextMenuApi.openContextMenu(event, () => (
             <Menu.Menu
                 navId="vc-iab-new-tab"
