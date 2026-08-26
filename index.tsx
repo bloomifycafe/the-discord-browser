@@ -5,7 +5,6 @@
  */
 
 import { ApplicationCommandOptionType, findOption } from "@api/Commands";
-import { HeaderBarButton } from "@api/HeaderBar";
 import ErrorBoundary from "@components/ErrorBoundary";
 import { WebsiteIcon } from "@components/Icons";
 import SettingsPlugin from "@plugins/_core/settings";
@@ -23,7 +22,6 @@ import {
     getView,
     keepBrowserTab,
     openBrowserTab,
-    setBrowserOpen,
     settings,
     shouldOpenInTab,
     startSync,
@@ -45,7 +43,7 @@ function SpeakerIcon() {
     );
 }
 
-const SETTINGS_KEYS: Array<"hideServerList" | "headerButton"> = ["hideServerList", "headerButton"];
+const SETTINGS_KEYS: Array<"hideServerList"> = ["hideServerList"];
 
 function PageHost({ children, ...rest }: ComponentProps<"div">) {
     const activeId = useActiveBrowserId();
@@ -58,25 +56,6 @@ function PageHost({ children, ...rest }: ComponentProps<"div">) {
         </div>
     );
 }
-
-function BrowserHeaderButton() {
-    const { headerButton } = settings.use(SETTINGS_KEYS);
-    const open = useBrowserOpen();
-
-    if (!headerButton) return null;
-
-    return (
-        <HeaderBarButton
-            icon={WebsiteIcon}
-            tooltip="Browser"
-            aria-label="Browser"
-            selected={open}
-            onClick={() => setBrowserOpen(!open)}
-        />
-    );
-}
-
-const SafeBrowserHeaderButton = ErrorBoundary.wrap(BrowserHeaderButton, { noop: true });
 
 export default definePlugin({
     name: "InAppBrowser",
@@ -209,11 +188,6 @@ export default definePlugin({
     PageHost: ErrorBoundary.wrap(PageHost, {
         fallback: ({ wrappedProps }) => <div {...wrappedProps} />
     }),
-
-    headerBarButton: {
-        icon: WebsiteIcon,
-        render: () => <SafeBrowserHeaderButton />
-    },
 
     commands: [
         {

@@ -7,7 +7,7 @@
 import { definePluginSettings } from "@api/Settings";
 import { OptionType, PluginNative } from "@utils/types";
 import { findStoreLazy } from "@webpack";
-import { ChannelRouter, FluxDispatcher, NavigationRouter, React, showToast, Toasts, useStateFromStores } from "@webpack/common";
+import { FluxDispatcher, React, showToast, Toasts, useStateFromStores } from "@webpack/common";
 
 export const PARTITION = "persist:vc-in-app-browser";
 
@@ -57,11 +57,6 @@ export const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         description: "Also hide the server list while browsing, for a full width page.",
         default: true
-    },
-    headerButton: {
-        type: OptionType.BOOLEAN,
-        description: "Show a browser button in the top bar that turns the current tab into a browser.",
-        default: false
     },
     newTabOpensBrowser: {
         type: OptionType.BOOLEAN,
@@ -518,55 +513,6 @@ export function urlForId(id: string) {
     }
 
     return found;
-}
-
-function historyBrowserId(tab: Tab) {
-    for (let i = tab.index; i >= 0; i--) {
-        const id = browserIdOf(tab.entries[i]);
-        if (id) return id;
-    }
-    return null;
-}
-
-function leaveBrowserTab(tab: Tab) {
-    restoreDeadline = 0;
-
-    for (let i = tab.index - 1; i >= 0; i--) {
-        const previous = tab.entries[i];
-        if (browserIdOf(previous) !== null) continue;
-
-        if (previous.kind === "channel" && previous.channelId) {
-            ChannelRouter.transitionToChannel(previous.channelId);
-            return;
-        }
-        if (previous.kind === "route" && previous.routePath) {
-            NavigationRouter.transitionTo(previous.routePath);
-            return;
-        }
-    }
-
-    NavigationRouter.transitionToGuild("@me");
-}
-
-export function setBrowserOpen(value: boolean) {
-    if (!tabsUsable()) {
-        showToast("Browser tabs need Discord's tabs enabled.", Toasts.Type.FAILURE);
-        return;
-    }
-
-    const tab = ChannelTabsStore.getActiveTab();
-    if (!tab || value === (browserIdOf(tab) !== null)) return;
-
-    if (!value) {
-        leaveBrowserTab(tab);
-        return;
-    }
-
-    FluxDispatcher.dispatch({
-        type: "CHANNEL_TABS_NAVIGATE_ROUTE",
-        routePath: routeFor(historyBrowserId(tab) ?? nextId()),
-        routeLabel: BROWSER_LABEL
-    });
 }
 
 const namedTabs = new Map<string, string>();
