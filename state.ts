@@ -7,7 +7,7 @@
 import { definePluginSettings } from "@api/Settings";
 import { OptionType, PluginNative } from "@utils/types";
 import { findStoreLazy } from "@webpack";
-import { FluxDispatcher, React, showToast, Toasts, useStateFromStores } from "@webpack/common";
+import { FluxDispatcher, React, showToast, useStateFromStores } from "@webpack/common";
 
 export const PARTITION = "persist:vc-in-app-browser";
 
@@ -538,7 +538,7 @@ function existingNamedTab(name: string) {
 
 export function openBrowserTab(url?: string, name?: string | null) {
     if (!tabsUsable()) {
-        showToast("Browser tabs need Discord's tabs enabled.", Toasts.Type.FAILURE);
+        showToast({ text: "Browser tabs need Discord's tabs enabled.", variant: "critical" });
         return;
     }
 

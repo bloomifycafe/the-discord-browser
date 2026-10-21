@@ -10,7 +10,7 @@ import { Button } from "@components/Button";
 import { classNameFactory } from "@utils/css";
 import { classes } from "@utils/misc";
 import { PluginNative } from "@utils/types";
-import { ContextMenuApi, Menu, React, SettingsRouter, showToast, TextInput, Toasts, Tooltip, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
+import { ContextMenuApi, Menu, React, SettingsRouter, showToast, TextInput, Tooltip, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 
 import {
@@ -390,14 +390,14 @@ function BrowserChrome({ id }: { id: string; }) {
     async function install() {
         if (!extensionId) return;
 
-        showToast("Installing extension…", Toasts.Type.MESSAGE);
+        showToast({ text: "Installing extension…" });
         const result = await Native.installExtension(extensionId);
 
         if (result.ok) {
-            showToast(`Installed ${result.name}.`, Toasts.Type.SUCCESS);
+            showToast({ text: `Installed ${result.name}.`, variant: "success" });
             refreshExtensions();
         }
-        else showToast(result.error ?? "Could not install that extension.", Toasts.Type.FAILURE);
+        else showToast({ text: result.error ?? "Could not install that extension.", variant: "critical" });
     }
 
     return (

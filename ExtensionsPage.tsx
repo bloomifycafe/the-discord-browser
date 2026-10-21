@@ -13,7 +13,7 @@ import { Switch } from "@components/Switch";
 import { classNameFactory } from "@utils/css";
 import { Margins } from "@utils/margins";
 import { PluginNative } from "@utils/types";
-import { showToast, TextInput, Toasts, useEffect, useState } from "@webpack/common";
+import { showToast, TextInput, useEffect, useState } from "@webpack/common";
 
 import { extensionIdFromUrl, openBrowserTab } from "./state";
 
@@ -40,11 +40,11 @@ export function ExtensionsPage() {
         setBusy(false);
 
         if (result.ok) {
-            showToast(`Installed ${result.name}.`, Toasts.Type.SUCCESS);
+            showToast({ text: `Installed ${result.name}.`, variant: "success" });
             setInput("");
             refresh();
         } else {
-            showToast(result.error ?? "Could not install that extension.", Toasts.Type.FAILURE);
+            showToast({ text: result.error ?? "Could not install that extension.", variant: "critical" });
         }
     }
 
@@ -52,17 +52,17 @@ export function ExtensionsPage() {
         const result = await Native.setUserScriptsAllowed(storeId, allowed);
 
         if (result.ok) refresh();
-        else showToast(result.error ?? "Could not change that permission.", Toasts.Type.FAILURE);
+        else showToast({ text: result.error ?? "Could not change that permission.", variant: "critical" });
     }
 
     async function remove(storeId: string, name: string) {
         const result = await Native.removeExtension(storeId);
 
         if (result.ok) {
-            showToast(`Removed ${name}.`, Toasts.Type.SUCCESS);
+            showToast({ text: `Removed ${name}.`, variant: "success" });
             refresh();
         } else {
-            showToast(result.error ?? "Could not remove that extension.", Toasts.Type.FAILURE);
+            showToast({ text: result.error ?? "Could not remove that extension.", variant: "critical" });
         }
     }
 
