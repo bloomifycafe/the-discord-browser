@@ -9,9 +9,10 @@ import ErrorBoundary from "@components/ErrorBoundary";
 import { WebsiteIcon } from "@components/Icons";
 import SettingsPlugin from "@plugins/_core/settings";
 import { classNameFactory } from "@utils/css";
-import { removeFromArray } from "@utils/misc";
+import { parseUrl, removeFromArray } from "@utils/misc";
 import definePlugin from "@utils/types";
-import { ContextMenuApi, Menu } from "@webpack/common";
+import { findComponentByCodeLazy } from "@webpack";
+import { ContextMenuApi, FluxDispatcher, Menu } from "@webpack/common";
 import type { ComponentProps, MouseEvent } from "react";
 
 import { BrowserFrame } from "./BrowserPage";
@@ -19,6 +20,7 @@ import { ExtensionsPage } from "./ExtensionsPage";
 import {
     browserIdOf,
     enableTabsExperiment,
+    findBrowserTabs,
     getView,
     keepBrowserTab,
     openBrowserTab,
@@ -56,6 +58,43 @@ function PageHost({ children, ...rest }: ComponentProps<"div">) {
         </div>
     );
 }
+
+const QuickSwitcherRow = findComponentByCodeLazy("navigationRecord:", ".PLAYGROUND:");
+
+const TAB_RESULT = "vc-iab-tab";
+
+type BrowserTab = ReturnType<typeof findBrowserTabs>[number];
+
+interface TabResult {
+    type: string;
+    record: BrowserTab;
+}
+
+interface TabResultRowProps {
+    tab: BrowserTab;
+    rowProps: Record<string, unknown>;
+}
+
+function selectTab(tab: BrowserTab) {
+    FluxDispatcher.dispatch({ type: "CHANNEL_TABS_SET_ACTIVE", tabId: tab.id });
+    FluxDispatcher.dispatch({ type: "QUICKSWITCHER_HIDE" });
+}
+
+const TabResultRow = ErrorBoundary.wrap(({ tab, rowProps }: TabResultRowProps) => (
+    <QuickSwitcherRow
+        {...rowProps}
+        navigationRecord={{
+            type: "PLAYGROUND",
+            label: tab.title,
+            IconComponent: () => tab.favicon
+                ? <img className={cl("favicon")} src={tab.favicon} alt="" aria-hidden />
+                : <WebsiteIcon width={16} height={16} />
+        }}
+        onClick={() => selectTab(tab)}
+    >
+        {parseUrl(tab.url)?.hostname}
+    </QuickSwitcherRow>
+), { noop: true });
 
 export default definePlugin({
     name: "InAppBrowser",
@@ -121,6 +160,26 @@ export default definePlugin({
                     replace: "$1=$self.useTabIcon($2);"
                 }
             ]
+        },
+        {
+            find: '"QuickSwitcherStore"',
+            replacement: {
+                match: /,(\i)\}\(\):(\i)(?=,\i\)\)\{\i=\i;var \i=\i,\i=(\i);switch\((\i)\))/,
+                replace: ',$self.withTabResults($1,"",$4)}():$self.withTabResults($2,$3,$4)'
+            }
+        },
+        {
+            find: "#{intl::QUICKSWITCHER_PLACEHOLDER}",
+            replacement: [
+                {
+                    match: /(?<=renderRow=\i=>\{let\{row:(\i)\}=\i,(\i)=this\.props\.results\[\i\],\{selectedIndex:(\i)\}=this\.props.{0,120}?;)(?=switch\(\i\.type\))/,
+                    replace: `if($2.type==="${TAB_RESULT}")return $self.renderTabRow($2,{id:this.getRowId($1),focused:$1===$3,onMouseEnter:()=>this.focusResult($2),onFocus:this.focusNode});`
+                },
+                {
+                    match: /(?<=case"enter":\{.{0,150}?if\(null==(\i)\)return;)/,
+                    replace: "if($self.selectTabResult($1))return;"
+                }
+            ]
         }
     ],
 
@@ -183,6 +242,30 @@ export default definePlugin({
                 <Menu.MenuItem id="vc-iab-browser-tab" label="Browser tab" action={() => openBrowserTab()} />
             </Menu.Menu>
         ));
+    },
+
+    withTabResults(results: unknown[], query: string, mode: string | null) {
+        if (mode != null) return results;
+
+        const tabs = findBrowserTabs(query);
+        if (tabs.length === 0) return results;
+
+        return [
+            ...results,
+            { type: "HEADER", record: { id: "vc-iab-tabs", text: "Browser tabs" }, score: 0 },
+            ...tabs.map(tab => ({ type: TAB_RESULT, record: tab, score: 0 }))
+        ];
+    },
+
+    renderTabRow(result: TabResult, rowProps: Record<string, unknown>) {
+        return <TabResultRow key={`${TAB_RESULT}-${result.record.id}`} tab={result.record} rowProps={rowProps} />;
+    },
+
+    selectTabResult(result: TabResult) {
+        if (result.type !== TAB_RESULT) return false;
+
+        selectTab(result.record);
+        return true;
     },
 
     PageHost: ErrorBoundary.wrap(PageHost, {

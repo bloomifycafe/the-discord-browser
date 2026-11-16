@@ -515,6 +515,21 @@ export function urlForId(id: string) {
     return found;
 }
 
+export function findBrowserTabs(query: string) {
+    const needle = query.toLowerCase();
+
+    return ChannelTabsStore.getTabs().flatMap(tab => {
+        const id = browserIdOf(tab);
+        if (id === null) return [];
+
+        const view = getView(id);
+        const url = view.url || urlForId(id) || "";
+        if (!view.title.toLowerCase().includes(needle) && !url.toLowerCase().includes(needle)) return [];
+
+        return [{ id: tab.id, title: view.title || url, url, favicon: view.favicon }];
+    });
+}
+
 const namedTabs = new Map<string, string>();
 
 /**
@@ -618,8 +633,6 @@ function trackRestore() {
 
     const previous = parseRoute(active.entries[active.index - 1]);
     if (!previous) return;
-
-    restoreDeadline = 0;
 
     FluxDispatcher.dispatch({
         type: "CHANNEL_TABS_NAVIGATE_ROUTE",
