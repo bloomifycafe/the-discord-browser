@@ -105,19 +105,19 @@ export default definePlugin({
             find: "PlusLargeIcon,onClick:",
             replacement: [
                 {
-                    match: /(?<=icon:\i\.PlusLargeIcon,)onClick:(\i\.\i)/,
-                    replace: "onClick:vcIabEvent=>$self.openNewTabMenu(vcIabEvent,$1)"
+                    match: /(?<=icon:\i\.PlusLargeIcon,onClick:)\(\)=>\(0,\i\.\i\)\("new_tab_button"\)/,
+                    replace: "vcIabEvent=>$self.openNewTabMenu(vcIabEvent,$&)"
                 },
                 {
                     match: /(?<=let )(?=\i="route"===(\i)\.kind\?)/,
                     replace: "vcIabLabel=$self.useTabLabel($1),"
                 },
                 {
-                    match: /(?<=lineClamp:1,children:)(\i)(?=\})/,
-                    replace: "vcIabLabel??$1"
+                    match: /(?<="route"===\i\.kind\?)\i\.routeLabel(?=:)/,
+                    replace: "vcIabLabel??$&"
                 },
                 {
-                    match: /(\i)=null;(?=if\("route"===(\i)\.kind\))/,
+                    match: /(\i)=null;(?=if\(!(\i)\.pinned\))/,
                     replace: "$1=$self.useTabIcon($2);"
                 }
             ]
