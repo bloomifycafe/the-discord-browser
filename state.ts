@@ -570,10 +570,8 @@ export function openBrowserTab(url?: string, name?: string | null) {
 
     FluxDispatcher.dispatch({
         type: "CHANNEL_TABS_OPEN",
-        kind: "route",
-        routePath: routeFor(id),
-        routeLabel: BROWSER_LABEL,
-        active: true
+        location: { kind: "route", routePath: routeFor(id), routeLabel: BROWSER_LABEL },
+        sourceTabId: null
     });
 }
 

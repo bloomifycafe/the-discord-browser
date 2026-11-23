@@ -123,7 +123,7 @@ export default definePlugin({
         {
             find: "trackAnnouncementMessageLinkClicked({",
             replacement: {
-                match: /(?<=function \i\(\i,\i\)\{)(?=.{0,300}trusted:)/,
+                match: /(?<=function \i\(\i,\i\)\{)(?=(?:(?!function ).){0,300}trusted:)/,
                 replace: "if($self.handleLink(...arguments))return;"
             }
         },
@@ -131,12 +131,12 @@ export default definePlugin({
             find: 'type:"CHANNEL_TABS_MOVE"',
             replacement: [
                 {
-                    match: /(?<="route"===(\i)\.kind\?)\(0,\i\.pX\)\(\i\.routePath\)/,
+                    match: /(?<="route"===(\i)\.kind\?)\(0,\i\.pX\)\(\i\.routePath,/,
                     replace: "$self.keepBrowserTab($1)||$&"
                 },
                 {
-                    match: /(?<="CHANNEL_TABS_FORWARD"\}\),)\(0,\i\.pX\)\((\i)\.routePath\)/,
-                    replace: "$self.keepBrowserTab($1,arguments[0])||$&"
+                    match: /(?<=\.index\+(\i);.{0,150}?"route"===(\i)\.kind\)\i=\(\)=>)\(0,\i\.pX\)\(\i\.routePath\)/,
+                    replace: "$self.keepBrowserTab($2,$1)||$&"
                 }
             ]
         },
@@ -156,7 +156,7 @@ export default definePlugin({
                     replace: "vcIabLabel??$&"
                 },
                 {
-                    match: /(\i)=null;(?=if\(!(\i)\.pinned\))/,
+                    match: /(\i)=null;(?=if\("route"===(\i)\.kind\)\{let \i=\i\[\i\.routePath\])/,
                     replace: "$1=$self.useTabIcon($2);"
                 }
             ]
@@ -176,7 +176,7 @@ export default definePlugin({
                     replace: `if($2.type==="${TAB_RESULT}")return $self.renderTabRow($2,{id:this.getRowId($1),focused:$1===$3,onMouseEnter:()=>this.focusResult($2),onFocus:this.focusNode});`
                 },
                 {
-                    match: /(?<=case"enter":\{.{0,150}?if\(null==(\i)\)return;)/,
+                    match: /(?<=onPick:\((\i),\i\)=>\{)/,
                     replace: "if($self.selectTabResult($1))return;"
                 }
             ]
